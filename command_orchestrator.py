@@ -600,18 +600,19 @@ class CommandOrchestrator:
         )
 
     @staticmethod
-    def _reconcile_generated_dates(
+    def _reconcile_generated_slots(
         plan: CommandPlan,
         query: str,
         state: CommandState,
     ) -> CommandPlan:
-        """Keep generated date slots grounded in the current user utterance.
+        """Keep generated slots grounded in the current user utterance.
 
         The model receives ``reference_date`` as context, but that context is
         not a user-specified date.  In particular, a date-free pair request
         must ask for a day instead of silently planning against the PoC's
-        current date.  Explicit dates are parsed locally and take precedence
-        over a model-generated ISO value.
+        current date.  Explicit dates and high-confidence fee conditions are
+        parsed locally and take precedence over omitted or model-generated
+        values.
         """
 
         parsed = event_search.parse_query(query, state.reference_date)
@@ -626,14 +627,33 @@ class CommandOrchestrator:
         elif plan.slots.refine_previous and state.last_command is not None:
             # Refinement is intentionally scoped to the prior result set; do
             # not erase a date carried by that already-validated context.
-            return plan
+            grounded_dates = list(plan.slots.dates)
         else:
             grounded_dates = []
 
-        if tuple(grounded_dates) == plan.slots.dates:
-            return plan
         values = plan.slots.to_dict()
         values["dates"] = grounded_dates
+        normalized_query = event_search.normalize_query(query).replace(" ", "")
+        free_is_negated = any(
+            phrase in normalized_query
+            for phrase in ("無料ではない", "無料でない", "無料じゃない", "無料ではありません")
+        )
+        if (
+            parsed.entry_free is True
+            and not free_is_negated
+            and "有料" not in normalized_query
+            and not plan.slots.paid_only
+        ):
+            # Do not let a valid-but-incomplete model command silently drop an
+            # explicit free-entry condition and return paid events.
+            values["entry_free"] = True
+            values["paid_only"] = False
+        elif parsed.paid_only is True and not plan.slots.entry_free:
+            values["paid_only"] = True
+            values["entry_free"] = False
+
+        if values == plan.slots.to_dict():
+            return plan
         return CommandPlan(
             flow=plan.flow,
             slots=CommandSlots.from_dict(values),
@@ -846,7 +866,7 @@ class CommandOrchestrator:
                     )
 
         if command_plan is None:
-            plan = self._reconcile_generated_dates(plan, value, context)
+            plan = self._reconcile_generated_slots(plan, value, context)
 
         missing = self._dynamic_missing(plan, context, self.adapters)
         if missing:
