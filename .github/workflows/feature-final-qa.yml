@@ -16,6 +16,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -44,12 +46,13 @@ jobs:
           python - <<'PY'
           import json
           from pathlib import Path
-          from jsonschema import Draft202012Validator
+          from jsonschema.validators import validator_for
           root = Path('.')
           schema = json.loads((root / 'data/events.schema.json').read_text(encoding='utf-8'))
           events = json.loads((root / 'data/events.json').read_text(encoding='utf-8'))
-          Draft202012Validator.check_schema(schema)
-          validator = Draft202012Validator(schema)
+          Validator = validator_for(schema)
+          Validator.check_schema(schema)
+          validator = Validator(schema)
           errors = sorted(validator.iter_errors(events), key=lambda e: list(e.path))
           if errors:
               raise SystemExit('\n'.join(str(error) for error in errors[:10]))
