@@ -550,7 +550,7 @@ if prompt:
 
     agentic_response = None
     parsed_for_agentic = event_search.parse_query(prompt, POC_REFERENCE_DATE)
-    if not pending_handled and route.action_type == "search" and agent_orchestrator.should_use_agentic_search(
+    if not pending_handled and agent_orchestrator.should_use_agentic_search(
         prompt,
         route,
         parsed_for_agentic,
@@ -573,7 +573,9 @@ if prompt:
         answer = agent_orchestrator.render_agentic_response(agentic_response)
         results = list(agentic_response.exact_events)
         near_results = list(agentic_response.relaxed_events)
-        relaxed_condition = "・".join(agentic_response.relaxed_fields) or None
+        relaxed_condition = "・".join(
+            agent_orchestrator.humanize_relaxed_fields(agentic_response.relaxed_fields)
+        ) or None
         filters = parsed_for_agentic
 
     if pending_handled:
@@ -748,6 +750,15 @@ if prompt:
             "search_count": agentic_response.search_count,
             "total_matches": agentic_response.total_matches,
             "relaxed_fields": list(agentic_response.relaxed_fields),
+            "strong_event_ids": list(agentic_response.strong_event_ids),
+            "reference_event_ids": list(agentic_response.reference_event_ids),
+            "latency_ms": {
+                "planner": agentic_response.latency.planner_ms,
+                "replan": agentic_response.latency.replan_ms,
+                "writer": agentic_response.latency.writer_ms,
+                "total": agentic_response.latency.total_ms,
+            },
+            "writer_skipped": agentic_response.writer_skipped,
         }
     if selected_event is not None:
         st.session_state.selected_event = selected_event

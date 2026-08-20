@@ -11,6 +11,7 @@ from datetime import date
 import re
 from typing import Any, Iterable, Mapping, Sequence
 
+import age_semantics
 import event_recommendation
 import event_search
 import faq_search
@@ -145,27 +146,28 @@ def _matches_soft_terms(event: Mapping[str, Any], filters: Mapping[str, Any]) ->
 
 def _matches_age(event: Mapping[str, Any], filters: Mapping[str, Any]) -> bool:
     age = filters.get("age")
-    age_group = _normalized(filters.get("age_group", ""))
-    age_intent = _normalized(filters.get("age_intent", ""))
-    if age_group and age_group not in {"child", "children", "小学生", "子ども", "こども", "family", "家族"}:
-        return False
-    if age_intent and age_intent not in {"recommended", "対象", "おすすめ", "推奨"}:
-        return False
-    wants_child = filters.get("child_friendly") is True or age is not None or age_group in {
-        "child",
-        "children",
-        "小学生",
-        "子ども",
-        "こども",
-    }
+    age_group = str(filters.get("age_group") or "")
+    age_intent = str(filters.get("age_intent") or "")
+    canonical_group = {
+        "小学生": "elementary",
+        "child": "preschool",
+        "children": "preschool",
+        "子ども": "preschool",
+        "こども": "preschool",
+    }.get(age_group, age_group or None)
+    wants_child = filters.get("child_friendly") is True or age is not None or canonical_group is not None
     if not wants_child:
         return True
     if event.get("子ども向け") is not True:
         return False
-    # The PoC data only guarantees a child-friendly boolean, not a detailed
-    # age range.  Do not invent one: a numeric age is therefore interpreted as
-    # a recommendation for child-friendly events.
-    return age_intent in {"", "recommended", "対象", "おすすめ", "推奨"} or age_intent is None
+    if age is None and canonical_group is None:
+        return True
+    return age_semantics.matches_event_age(
+        event,
+        age=age if isinstance(age, int) and not isinstance(age, bool) else None,
+        age_group=canonical_group,
+        age_intent=age_intent or None,
+    )
 
 
 def _matches_reservation(event: Mapping[str, Any], filters: Mapping[str, Any]) -> bool:
@@ -240,6 +242,16 @@ def _ranking_score(event: Mapping[str, Any], filters: Mapping[str, Any], referen
             score += 50
     if filters.get("child_friendly") is True and event.get("子ども向け") is True:
         score += 15
+    age = filters.get("age")
+    age_group = str(filters.get("age_group") or "") or None
+    if age is not None or age_group:
+        match = age_semantics.event_age_match(
+            event,
+            age=age if isinstance(age, int) and not isinstance(age, bool) else None,
+            age_group=age_group,
+            age_intent=str(filters.get("age_intent") or "") or None,
+        )
+        score += {"strong": 12, "reference": 4, "unknown": 1}.get(match, 0)
     if filters.get("entry_free") is True and event_search.is_entry_free(str(event["料金"])):
         score += 10
     start, end = event_search.parse_event_dates(str(event["日時"]))
@@ -252,6 +264,32 @@ def _ranking_score(event: Mapping[str, Any], filters: Mapping[str, Any], referen
     return score, distance
 
 
+def _age_match_ids(
+    events: Sequence[Mapping[str, Any]],
+    filters: Mapping[str, Any],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Return strong/reference IDs without treating recommendations as limits."""
+
+    age = filters.get("age")
+    age_group = str(filters.get("age_group") or "") or None
+    if age is None and age_group is None:
+        return (), ()
+    strong: list[str] = []
+    reference: list[str] = []
+    for event in events:
+        classification = age_semantics.event_age_match(
+            event,
+            age=age if isinstance(age, int) and not isinstance(age, bool) else None,
+            age_group=age_group,
+            age_intent=str(filters.get("age_intent") or "") or None,
+        )
+        if classification == "strong":
+            strong.append(_event_id(event))
+        elif classification == "reference":
+            reference.append(_event_id(event))
+    return tuple(strong), tuple(reference)
+
+
 def execute_structured_search(
     spec: SearchSpec,
     events: Iterable[dict[str, Any]] | None = None,
@@ -260,6 +298,7 @@ def execute_structured_search(
     source_events = list(event_search.load_events() if events is None else events)
     matched = [event for event in source_events if _matches_event(event, spec.filters)]
     matched.sort(key=lambda event: (-_ranking_score(event, spec.filters, reference_date)[0], _ranking_score(event, spec.filters, reference_date)[1], source_events.index(event)))
+    strong_event_ids, reference_event_ids = _age_match_ids(matched, spec.filters)
     return ToolResult(
         search_id=spec.search_id,
         purpose=spec.purpose,
@@ -268,6 +307,8 @@ def execute_structured_search(
         all_event_ids=[_event_id(event) for event in matched],
         relaxed=spec.relaxed,
         relaxed_fields=spec.relaxed_fields,
+        strong_event_ids=strong_event_ids,
+        reference_event_ids=reference_event_ids,
     )
 
 

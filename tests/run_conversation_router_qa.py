@@ -108,6 +108,20 @@ check(similar_route.recommendation_mode == "similar", "similar recommendation mo
 similar_without_selection = route("他にも候補を見せて")
 check(similar_without_selection.action_type == "recommend_similar_without_selection", "empty similar recommendation did not ask for selection")
 
+# Recommendation intent wins over ordinal/pronoun reference resolution.
+next_pronoun = route("そのイベントのあと何か行ける？", [opening], opening)
+check(next_pronoun.action_type == "recommend_next", "recommendation pronoun became reference followup")
+check(next_pronoun.selected_event == opening, "recommendation pronoun selected wrong seed")
+
+similar_ordinal = route("2番目と似たイベントある？", [opening, saijo], opening)
+check(similar_ordinal.action_type == "recommend_similar", "ordinal similar query became reference followup")
+check(similar_ordinal.reference_index == 1, "similar ordinal index is incorrect")
+check(similar_ordinal.selected_event == saijo, "similar ordinal selected wrong seed")
+
+named_similar = route("砥部焼と似たイベントある？", [opening], opening)
+check(named_similar.action_type == "recommend_similar", "named similar query was not routed")
+check(named_similar.selected_event == tobe, "named event did not override stale selected event")
+
 # 13. Period-event recommendation still enters the recommendation branch; the
 # recommendation module separately decides whether it needs a date.
 period_route = route("このあと何か行ける？", [tobe], tobe)
@@ -141,4 +155,4 @@ ordinal_over_state = route("2番目は雨でも開催？", [opening, saijo], ope
 check(ordinal_over_state.selected_event == saijo, "ordinal did not override session selected event")
 check(ordinal_over_state.detail_field == "rain_policy", "rain detail field was not detected")
 
-print("Conversation Router QA: PASS (20 cases)")
+print("Conversation Router QA: PASS (24 cases)")

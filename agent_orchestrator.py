@@ -10,12 +10,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
-import re
+from time import perf_counter
 from typing import Any, Callable, Mapping, Sequence
 
+import age_semantics
 import conversation_router
 import event_search
-from agent_models import AgenticResponse, MergedResults, SearchPlan, SearchSpec, ToolResult, WriterOutput
+from agent_models import AgenticLatency, AgenticResponse, MergedResults, SearchPlan, SearchSpec, ToolResult, WriterOutput
 from agent_planner import (
     ModalConfig,
     request_replan,
@@ -33,21 +34,134 @@ MAX_SEARCHES_PER_ROUND = 3
 MAX_TOTAL_SEARCHES = 5
 
 
+# Planner/Replan keeps machine-readable field names for validation and QA.
+# Convert them only at the presentation boundary so internal contract names
+# such as ``soft_terms`` never leak into the user-facing response.
+_RELAXED_FIELD_LABELS = {
+    "dates": "日付条件",
+    "municipalities": "市町条件",
+    "regions": "地域条件",
+    "genres": "ジャンル条件",
+    "genre_groups": "ジャンル条件",
+    "age": "年齢条件",
+    "age_group": "対象年齢条件",
+    "child_friendly": "子ども向け条件",
+    "venue": "屋内外条件",
+    "entry_free": "無料条件",
+    "paid_only": "有料条件",
+    "max_entry_fee": "料金上限",
+    "reservation_required": "申込条件",
+    "rain_preferred": "雨天対応条件",
+    "time_slots": "時間帯条件",
+    "time_after": "開始時刻条件",
+    "soft_terms": "趣味・キーワード条件",
+}
+
+
 @dataclass(frozen=True)
 class FastDecision:
     can_handle: bool
     reason: str = ""
 
 
+@dataclass(frozen=True)
+class ParserCoverage:
+    """Explain which meaningful query constraints the legacy parser covered."""
+
+    complete: bool
+    recognized_constraints: tuple[str, ...] = ()
+    unresolved_constraints: tuple[str, ...] = ()
+    semantic_soft_terms: tuple[str, ...] = ()
+    reason: str = ""
+
+
+def humanize_relaxed_fields(fields: Sequence[str]) -> tuple[str, ...]:
+    """Return safe, user-facing labels for machine-readable relaxed fields."""
+
+    labels: list[str] = []
+    for field in fields:
+        label = _RELAXED_FIELD_LABELS.get(str(field), "一部の条件")
+        if label not in labels:
+            labels.append(label)
+    return tuple(labels)
+
+
+def assess_parser_coverage(query: str, parsed_filters: event_search.SearchFilters) -> ParserCoverage:
+    """Separate structured coverage from residual semantic constraints.
+
+    A constraint can be recognized and still require Agentic Search when the
+    legacy matcher cannot safely enforce its meaning (age semantics and exact
+    reservation state are the important examples here).
+    """
+
+    normalized = event_search.normalize_query(query)
+    recognized: list[str] = []
+    unresolved: list[str] = []
+    semantic_soft_terms = tuple(str(value) for value in parsed_filters.soft_terms)
+
+    if parsed_filters.dates:
+        recognized.append("dates")
+    if parsed_filters.city_groups:
+        recognized.append("municipalities")
+    if parsed_filters.region_groups:
+        recognized.append("regions")
+    if parsed_filters.genre_groups:
+        recognized.append("genres")
+    if parsed_filters.intent == "count":
+        recognized.append("answer_type=count")
+    if parsed_filters.age is not None:
+        recognized.append(f"age={parsed_filters.age}")
+    if parsed_filters.age_group:
+        recognized.append(f"age_group={parsed_filters.age_group}")
+    if parsed_filters.age_intent:
+        recognized.append(f"age_intent={parsed_filters.age_intent}")
+    if parsed_filters.age is not None or parsed_filters.age_group:
+        unresolved.append("age_semantics")
+    elif age_semantics.query_age_semantics(normalized).recognized:
+        unresolved.append("age_constraint")
+
+    if parsed_filters.venue:
+        recognized.append(f"venue={parsed_filters.venue}")
+    if any(term in normalized for term in ("建物の中", "建物内", "建物", "中でやる")):
+        # Even if the deterministic parser records 屋内, keep this natural
+        # phrase on Agentic Search so the semantic trace is explicit.
+        unresolved.append("indoor_semantics")
+    if parsed_filters.reservation_required is not None:
+        recognized.append(f"reservation_required={parsed_filters.reservation_required}")
+    if any(term in normalized for term in ("予約なし", "予約不要", "予約はいらない", "予約いらない", "申込不要", "申し込み不要", "申込なし", "申し込みなし")):
+        unresolved.append("reservation_semantics")
+    if parsed_filters.child_friendly:
+        recognized.append("child_friendly")
+    if parsed_filters.entry_free:
+        recognized.append("entry_free")
+    if parsed_filters.paid_only:
+        recognized.append("paid_only")
+    if parsed_filters.time_slots or parsed_filters.time_after is not None:
+        recognized.append("time")
+    if parsed_filters.soft_terms:
+        recognized.append("soft_terms")
+
+    unresolved = list(dict.fromkeys(unresolved))
+    return ParserCoverage(
+        complete=not unresolved,
+        recognized_constraints=tuple(dict.fromkeys(recognized)),
+        unresolved_constraints=tuple(unresolved),
+        semantic_soft_terms=semantic_soft_terms,
+        reason="complete" if not unresolved else "semantic coverage incomplete",
+    )
+
+
 def parser_confidence_is_high(parsed_filters: event_search.SearchFilters, query: str) -> bool:
     """Identify questions the existing deterministic parser already handles."""
 
+    if not assess_parser_coverage(query, parsed_filters).complete:
+        return False
     intent = event_search.classify_intent(query)
     # Numeric age is intentionally reserved for Agentic Search because the
     # legacy parser has no age-range field.  Other concrete v2 filters below
     # are already deterministic and must stay on the Fast Path.
     normalized_query = event_search.normalize_query(query)
-    if re.search(r"\d{1,2}歳", normalized_query):
+    if age_semantics.query_age_semantics(normalized_query).recognized:
         return False
     # The legacy count classifier does not cover every colloquial count
     # phrase (notably 「どれくらい」), so keep those on Agentic Search where
@@ -91,7 +205,7 @@ def looks_like_event_discovery(query: str) -> bool:
     normalized = event_search.normalize_query(query)
     if any(term in normalized for term in ("どれくらい", "どのくらい", "どの程度")):
         return True
-    if re.search(r"\d{1,2}歳", normalized) and any(
+    if age_semantics.query_age_semantics(normalized).recognized and any(
         term in normalized for term in ("楽しめる", "おすすめ", "ある", "イベント")
     ):
         return True
@@ -131,7 +245,10 @@ def evaluate_fast_path(
         "detail_followup",
         "general_faq",
         "recommend_next",
+        "recommend_next_without_selection",
         "recommend_similar",
+        "recommend_similar_without_selection",
+        "nearby",
     }:
         return FastDecision(True, route.action_type)
     if parsed.intent in {"injection", "out_of_scope", "needs_location", "needs_region"}:
@@ -157,15 +274,21 @@ def should_use_agentic_search(
         "general_faq",
         "recommend_next",
         "recommend_similar",
+        "recommend_next_without_selection",
+        "recommend_similar_without_selection",
+        "nearby",
     }:
+        return False
+    if route.action_type not in {"search", "generic_scope"}:
         return False
     if parsed_filters.entity and parsed_filters.requested_field:
         return False
-    if parser_confidence_is_high(parsed_filters, query):
+    coverage = assess_parser_coverage(query, parsed_filters)
+    if coverage.complete and parser_confidence_is_high(parsed_filters, query):
         return False
     if event_search.classify_intent(query) in {"injection", "out_of_scope"}:
         return False
-    return looks_like_event_discovery(query)
+    return event_search.looks_like_event_query(query) or looks_like_event_discovery(query)
 
 
 def _event_id(event: Mapping[str, Any]) -> str:
@@ -215,6 +338,8 @@ def summarize_tool_results(results: Sequence[ToolResult]) -> dict[str, Any]:
                 "event_ids": result.all_event_ids[:MAX_SEARCH_RESULTS],
                 "relaxed": result.relaxed,
                 "relaxed_fields": list(result.relaxed_fields),
+                "strong_event_ids": list(result.strong_event_ids),
+                "reference_event_ids": list(result.reference_event_ids),
             }
             for result in results
         ]
@@ -238,9 +363,13 @@ def build_deterministic_facts(
     else:
         total_matches = 0
     relaxed_fields: list[str] = []
+    strong_event_ids: list[str] = []
+    reference_event_ids: list[str] = []
     for result in tool_results:
         if result.relaxed:
             relaxed_fields.extend(result.relaxed_fields)
+        strong_event_ids.extend(result.strong_event_ids)
+        reference_event_ids.extend(result.reference_event_ids)
     return {
         "query": query,
         "answer_type": plan.answer_type,
@@ -248,6 +377,8 @@ def build_deterministic_facts(
         "exact_event_ids": [_event_id(event) for event in merged_results.exact_events],
         "relaxed_event_ids": [_event_id(event) for event in merged_results.relaxed_events],
         "relaxed_fields": list(dict.fromkeys(relaxed_fields)),
+        "strong_event_ids": list(dict.fromkeys(strong_event_ids)),
+        "reference_event_ids": list(dict.fromkeys(reference_event_ids)),
     }
 
 
@@ -313,7 +444,7 @@ def render_agentic_response(response: AgenticResponse) -> str:
     if response.lead:
         parts.append(response.lead)
     if response.relaxed_events:
-        fields = "・".join(response.relaxed_fields) if response.relaxed_fields else "一部の条件"
+        fields = "・".join(humanize_relaxed_fields(response.relaxed_fields)) or "一部の条件"
         parts.append(f"参考候補は「{fields}」を少し広げた結果です。")
     if response.follow_up:
         parts.append(response.follow_up)
@@ -355,6 +486,7 @@ def handle_agentic_query(
     replan_request: Callable[[str, SearchPlan, Mapping[str, Any]], SearchPlan | None] | None = None,
     writer_request: Callable[[Mapping[str, Any]], WriterOutput | None] | None = None,
 ) -> AgenticResponse:
+    total_started = perf_counter()
     fast_decision = evaluate_fast_path(query, conversation_state, reference_date=reference_date)
     if fast_decision.can_handle:
         return execute_existing_fast_path(query, fast_decision, conversation_state, reference_date=reference_date)
@@ -366,6 +498,8 @@ def handle_agentic_query(
         "last_result_ids": conversation_state.get("last_result_ids", []),
         "last_filters": conversation_state.get("last_filters", {}),
     }
+    planner_started = perf_counter()
+    planner_calls = 1
     if planner_request is None:
         plan = request_search_plan(planner_context, modal_config)
     else:
@@ -377,10 +511,13 @@ def handle_agentic_query(
         )
     if not isinstance(plan, SearchPlan):
         plan = request_search_plan({"query": query, "reference_date": reference_date.isoformat()}, None)
+    planner_ms = (perf_counter() - planner_started) * 1000
 
     all_results: list[ToolResult] = []
     total_search_count = 0
     planner_rounds = 0
+    replan_ms = 0.0
+    replan_calls = 0
     current_plan = plan
     for planner_round in range(MAX_PLANNER_ROUNDS):
         planner_rounds = planner_round + 1
@@ -397,11 +534,14 @@ def handle_agentic_query(
         if not should_replan(current_plan, all_results, planner_round):
             break
         result_summary = summarize_tool_results(all_results)
+        replan_started = perf_counter()
+        replan_calls += 1
         if replan_request is None:
             next_plan = request_replan(query, current_plan, result_summary, modal_config)
         else:
             next_plan = replan_request(query, current_plan, result_summary)
             next_plan = validate_replan_plan(next_plan, current_plan)
+        replan_ms += (perf_counter() - replan_started) * 1000
         if next_plan is None:
             break
         current_plan = next_plan
@@ -409,10 +549,19 @@ def handle_agentic_query(
     merged = merge_agent_results(all_results)
     facts = build_deterministic_facts(query, current_plan, merged, all_results)
     writer_input = build_writer_payload(query, facts, merged.display_candidates)
-    if writer_request is None:
-        writer = request_writer(writer_input, modal_config)
+    writer_skipped = str(facts["answer_type"]) == "count" and not facts["relaxed_event_ids"]
+    writer_calls = 0
+    writer_ms = 0.0
+    if writer_skipped:
+        writer = None
     else:
-        writer = writer_request(writer_input)
+        writer_started = perf_counter()
+        writer_calls = 1
+        if writer_request is None:
+            writer = request_writer(writer_input, modal_config)
+        else:
+            writer = writer_request(writer_input)
+        writer_ms = (perf_counter() - writer_started) * 1000
     if writer is None:
         writer = deterministic_writer_fallback(facts)
     exact_events = _order_by_writer(merged.exact_events, writer.recommended_event_ids)
@@ -433,4 +582,16 @@ def handle_agentic_query(
         planner_rounds=planner_rounds,
         search_count=total_search_count,
         recommended_event_ids=writer.recommended_event_ids,
+        latency=AgenticLatency(
+            planner_ms=planner_ms,
+            replan_ms=replan_ms,
+            writer_ms=writer_ms,
+            total_ms=(perf_counter() - total_started) * 1000,
+            planner_calls=planner_calls,
+            replan_calls=replan_calls,
+            writer_calls=writer_calls,
+        ),
+        writer_skipped=writer_skipped,
+        strong_event_ids=tuple(str(value) for value in facts["strong_event_ids"]),
+        reference_event_ids=tuple(str(value) for value in facts["reference_event_ids"]),
     )

@@ -18,6 +18,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
+import age_semantics
 from app_config import (
     CHILD_TERMS,
     CITY_ALIASES,
@@ -88,6 +89,7 @@ _GENERIC_STOPWORDS = frozenset(
         "近く", "近い", "近場", "周辺", "伝統文化", "伝統芸能", "いつ", "いつですか",
         "行われますか", "開催されますか", "開催日", "開催日時", "開催", "何日に", "何時", "何時から",
         "どこ", "どこですか", "どこで", "場所は", "会場は", "いくら", "料金は", "何円",
+        "いくつくらい", "何件くらい", "何個くらい", "件くらい",
         "費用", "予約必要", "予約は必要", "ですか", "かな", "でしょうか", "系", "っぽい",
         "が好き", "がいい", "に興味", "に関係する", "関連する", "イベントある", "文化イベント",
         "体験", "したい", "見たい", "入れる", "有料", "やつ", "時以降", "時から",
@@ -124,10 +126,14 @@ class SearchFilters:
     genres: list[str] = field(default_factory=list)
     genre_groups: list[list[str]] = field(default_factory=list)
     child_friendly: bool | None = None
+    age: int | None = None
+    age_group: str | None = None
+    age_intent: str | None = None
     venue: str | None = None
     rain_preferred: bool = False
     entry_free: bool | None = None
     paid_only: bool = False
+    reservation_required: bool | None = None
     max_entry_fee: int | None = None
     time_slots: list[str] = field(default_factory=list)
     time_after: int | None = None
@@ -500,7 +506,11 @@ def _extract_soft_terms(query: str) -> list[str]:
             short = city.removesuffix("市").removesuffix("町")
             if _city_in_location_context(normalized, short):
                 work = work.replace(short, " ")
-    control_terms = set(_GENERIC_STOPWORDS) | set(CHILD_TERMS) | set(INDOOR_TERMS) | set(OUTDOOR_TERMS) | set(RAIN_TERMS) | set(FREE_TERMS) | set(PAID_TERMS) | set(NEAR_TERMS) | {"か", "または", "と", "で", "の", "は", "が", "を", "に", "や", "へ", "も"}
+    control_terms = set(_GENERIC_STOPWORDS) | set(CHILD_TERMS) | set(INDOOR_TERMS) | set(OUTDOOR_TERMS) | set(RAIN_TERMS) | set(FREE_TERMS) | set(PAID_TERMS) | set(NEAR_TERMS) | {
+        "予約なし", "予約不要", "予約はいらない", "予約いらない", "申込不要", "申し込み不要",
+        "申込なし", "申し込みなし", "建物の中", "建物内", "建物", "中でやる",
+        "か", "または", "と", "で", "の", "は", "が", "を", "に", "や", "へ", "も",
+    }
     for term in sorted(control_terms, key=len, reverse=True):
         work = work.replace(term, " ")
     tokens = re.findall(r"[一-龥々ぁ-んァ-ヶA-Za-z][一-龥々ぁ-んァ-ヶA-Za-z0-9ー・]{1,}", work)
@@ -541,17 +551,25 @@ def _extract_entity(soft_terms: list[str], query: str) -> str | None:
 
 def parse_query(query: str, reference_date: date = POC_REFERENCE_DATE) -> SearchFilters:
     normalized = normalize_query(query)
+    age_query = age_semantics.query_age_semantics(normalized)
     dates, invalid_date = _query_dates(normalized, reference_date)
     city_groups = _query_city_groups(normalized)
     region_found = [region for region in REGION_CITIES if region in normalized]
     region_groups = [region_found] if len(region_found) > 1 and re.search(r"か|または", normalized) else [[region] for region in region_found]
     genres, genre_groups = _extract_genre_groups(normalized)
-    soft_terms = _extract_soft_terms(normalized)
+    soft_terms = [term for term in _extract_soft_terms(normalized) if not age_semantics.is_age_query_term(term)]
     requested_field = _requested_field(normalized)
     child_requested = any(term in normalized for term in CHILD_TERMS) or bool(
         re.search(r"(?:小|小学)\s*[1-6](?:年生)?", normalized)
     )
-    venue = "屋内" if any(term in normalized for term in INDOOR_TERMS) else "屋外" if any(term in normalized for term in OUTDOOR_TERMS) else None
+    venue = (
+        "屋内"
+        if any(term in normalized for term in INDOOR_TERMS)
+        or any(term in normalized for term in ("建物の中", "建物内", "建物", "中でやる"))
+        else "屋外"
+        if any(term in normalized for term in OUTDOOR_TERMS)
+        else None
+    )
     free_requested = any(term in normalized for term in ("無料", "タダ")) or bool(
         re.search(r"ただ(?:で|だけ|入場)", normalized)
     )
@@ -559,18 +577,26 @@ def parse_query(query: str, reference_date: date = POC_REFERENCE_DATE) -> Search
     zero_yen_requested = re.search(r"(?<![\d,])0\s*円", normalized) is not None
     fee_limit = _FEE_LIMIT_RE.search(normalized)
     time_slots, time_after = _extract_time_filters(normalized)
+    reservation_required = None
+    if any(term in normalized for term in ("予約なし", "予約不要", "予約はいらない", "予約いらない", "申込不要", "申し込み不要", "申込なし", "申し込みなし")):
+        reservation_required = False
+    elif any(term in normalized for term in ("予約必要", "予約が必要", "申込必要", "申し込み必要")):
+        reservation_required = True
     city = city_groups[0][0] if len(city_groups) == 1 and len(city_groups[0]) == 1 else None
     region = region_groups[0][0] if len(region_groups) == 1 and len(region_groups[0]) == 1 else None
     intent = classify_intent(normalized, _parsed_hint=True, parsed_values=(soft_terms, requested_field))
     return SearchFilters(
         dates=[day.isoformat() for day in dates], city=city, region=region,
         city_groups=city_groups, region_groups=region_groups, genres=genres, genre_groups=genre_groups,
-        child_friendly=True if child_requested else None, venue=venue,
+        child_friendly=True if child_requested or age_query.recognized else None,
+        age=age_query.age, age_group=age_query.age_group, age_intent=age_query.age_intent,
+        venue=venue,
         rain_preferred=any(term in normalized for term in RAIN_TERMS),
         entry_free=True if free_requested or zero_yen_requested else None,
         paid_only=paid_requested,
         max_entry_fee=int(fee_limit.group("amount").replace(",", "")) if fee_limit else None,
         time_slots=time_slots, time_after=time_after, keywords=soft_terms, soft_terms=soft_terms,
+        reservation_required=reservation_required,
         intent=intent, entity=_extract_entity(soft_terms, normalized), requested_field=requested_field,
         invalid_date=invalid_date,
     )
@@ -580,8 +606,14 @@ def merge_filters(current: SearchFilters, previous: Mapping[str, Any] | None) ->
     if not previous:
         return current
     merged = current.to_dict()
-    for key in ("dates", "city", "region", "city_groups", "region_groups", "genres", "genre_groups", "child_friendly", "venue", "rain_preferred", "entry_free", "paid_only", "max_entry_fee", "time_slots", "time_after", "soft_terms", "keywords"):
-        if merged[key] in (None, [], False) and previous.get(key) not in (None, [], False):
+    for key in ("dates", "city", "region", "city_groups", "region_groups", "genres", "genre_groups", "child_friendly", "age", "age_group", "age_intent", "venue", "rain_preferred", "entry_free", "paid_only", "max_entry_fee", "reservation_required", "time_slots", "time_after", "soft_terms", "keywords"):
+        if key in {"age", "age_group", "age_intent", "reservation_required"}:
+            current_missing = merged[key] is None
+            previous_present = previous.get(key) is not None
+        else:
+            current_missing = merged[key] in (None, [], False)
+            previous_present = previous.get(key) not in (None, [], False)
+        if current_missing and previous_present:
             merged[key] = previous[key]
     if current.entity is None and previous.get("entity"):
         merged["entity"] = previous["entity"]
@@ -703,6 +735,12 @@ def _matches_hard(event: Mapping[str, Any], filters: SearchFilters) -> bool:
         return False
     if filters.max_entry_fee is not None and base_entry_fee(str(event["料金"])) > filters.max_entry_fee:
         return False
+    if filters.reservation_required is not None:
+        required = str(event.get("参加案内", {}).get("申込要否", ""))
+        if filters.reservation_required is False and required != "不要":
+            return False
+        if filters.reservation_required is True and required != "必要":
+            return False
     return _matches_time(event, filters)
 
 
@@ -823,10 +861,11 @@ def looks_like_event_query(query: str) -> bool:
         return False
     # Age-oriented discovery is intentionally left for the bounded Agentic
     # Search planner when the legacy parser has no dedicated age field yet.
-    if re.search(r"\d{1,2}歳", normalize_query(query)):
+    normalized = normalize_query(query)
+    if age_semantics.query_age_semantics(normalized).recognized:
         return True
     filters = parse_query(query)
-    return bool(filters.dates or filters.city_groups or filters.region_groups or filters.genre_groups or filters.child_friendly or filters.venue or filters.rain_preferred or filters.entry_free or filters.paid_only or filters.max_entry_fee is not None or filters.time_slots or filters.time_after is not None or filters.soft_terms or filters.requested_field or intent in {"count", "refine", "attribute"})
+    return bool(filters.dates or filters.city_groups or filters.region_groups or filters.genre_groups or filters.child_friendly or filters.age is not None or filters.age_group or filters.venue or filters.reservation_required is not None or filters.rain_preferred or filters.entry_free or filters.paid_only or filters.max_entry_fee is not None or filters.time_slots or filters.time_after is not None or filters.soft_terms or filters.requested_field or intent in {"count", "refine", "attribute"})
 
 
 def asks_for_nearby(query: str) -> bool:

@@ -149,6 +149,24 @@ def is_general_faq_context(
     return not filters.soft_terms and not filters.dates and not filters.city_groups and not filters.region_groups
 
 
+def _resolve_recommendation_seed(
+    query: str,
+    last_results: Sequence[Mapping[str, Any]],
+    selected_event: Mapping[str, Any] | None,
+    named_event: Mapping[str, Any] | None,
+    reference_index: int | None,
+) -> Mapping[str, Any] | None:
+    """Resolve a recommendation seed after the recommendation intent wins."""
+
+    if named_event is not None:
+        return named_event
+    if reference_index is not None and 0 <= reference_index < len(last_results):
+        return last_results[reference_index]
+    if is_pronoun_reference(query):
+        return selected_event or (last_results[0] if len(last_results) == 1 else None)
+    return selected_event or (last_results[0] if len(last_results) == 1 else None)
+
+
 def route_conversation(
     query: str,
     last_results: Sequence[Mapping[str, Any]],
@@ -162,11 +180,52 @@ def route_conversation(
     faq_match = faq_search.find_faq(query)
     reference_index = event_search.resolve_reference_index(query, len(last_results))
     named_event = named_event_match(query)
-    named_context = contains_named_event_context(query)
+
+    if event_recommendation.is_next_query(query):
+        target = _resolve_recommendation_seed(
+            query, last_results, selected_event, named_event, reference_index
+        )
+        if target is not None:
+            return ConversationRoute(
+                "recommend_next",
+                reference_index=reference_index,
+                selected_event=target,
+                faq_match=faq_match,
+                recommendation_mode="next",
+            )
+        if is_general_faq_context(query, faq_match, reference_date):
+            return ConversationRoute("general_faq", faq_match=faq_match)
+        return ConversationRoute(
+            "recommend_next_without_selection",
+            reference_index=reference_index,
+            faq_match=faq_match,
+            recommendation_mode="next",
+        )
+
+    if event_recommendation.is_similar_query(query):
+        target = _resolve_recommendation_seed(
+            query, last_results, selected_event, named_event, reference_index
+        )
+        if target is not None:
+            return ConversationRoute(
+                "recommend_similar",
+                reference_index=reference_index,
+                selected_event=target,
+                faq_match=faq_match,
+                recommendation_mode="similar",
+            )
+        if is_general_faq_context(query, faq_match, reference_date):
+            return ConversationRoute("general_faq", faq_match=faq_match)
+        return ConversationRoute(
+            "recommend_similar_without_selection",
+            reference_index=reference_index,
+            faq_match=faq_match,
+            recommendation_mode="similar",
+        )
 
     if last_results and (reference_index is not None or is_pronoun_reference(query)):
         target = None
-        if reference_index is not None:
+        if reference_index is not None and 0 <= reference_index < len(last_results):
             target = last_results[reference_index]
         elif selected_event is not None:
             target = selected_event
@@ -188,45 +247,6 @@ def route_conversation(
             detail_field=detail_field,
             selected_event=selected_event or last_results[0],
             faq_match=faq_match,
-        )
-
-    if event_recommendation.is_next_query(query):
-        if named_event is not None:
-            target = named_event
-        elif named_context:
-            target = None
-        else:
-            target = selected_event or (last_results[0] if len(last_results) == 1 else None)
-        if target is not None:
-            return ConversationRoute(
-                "recommend_next",
-                selected_event=target,
-                faq_match=faq_match,
-                recommendation_mode="next",
-            )
-        if is_general_faq_context(query, faq_match, reference_date):
-            return ConversationRoute("general_faq", faq_match=faq_match)
-        return ConversationRoute(
-            "recommend_next_without_selection",
-            faq_match=faq_match,
-            recommendation_mode="next",
-        )
-
-    if event_recommendation.is_similar_query(query):
-        target = selected_event or (last_results[0] if len(last_results) == 1 else None)
-        if target is not None:
-            return ConversationRoute(
-                "recommend_similar",
-                selected_event=target,
-                faq_match=faq_match,
-                recommendation_mode="similar",
-            )
-        if is_general_faq_context(query, faq_match, reference_date):
-            return ConversationRoute("general_faq", faq_match=faq_match)
-        return ConversationRoute(
-            "recommend_similar_without_selection",
-            faq_match=faq_match,
-            recommendation_mode="similar",
         )
 
     if event_search.asks_for_nearby(query):

@@ -169,6 +169,8 @@ class ToolResult:
     relaxed: bool = False
     relaxed_fields: tuple[str, ...] = ()
     message: str = ""
+    strong_event_ids: tuple[str, ...] = ()
+    reference_event_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -187,6 +189,19 @@ class WriterOutput:
 
 
 @dataclass(frozen=True)
+class AgenticLatency:
+    """Internal wall-clock observations for one bounded agentic turn."""
+
+    planner_ms: float = 0.0
+    replan_ms: float = 0.0
+    writer_ms: float = 0.0
+    total_ms: float = 0.0
+    planner_calls: int = 0
+    replan_calls: int = 0
+    writer_calls: int = 0
+
+
+@dataclass(frozen=True)
 class AgenticResponse:
     answer_type: str
     total_matches: int
@@ -199,3 +214,7 @@ class AgenticResponse:
     planner_rounds: int = 0
     search_count: int = 0
     recommended_event_ids: tuple[str, ...] = ()
+    latency: AgenticLatency = field(default_factory=AgenticLatency)
+    writer_skipped: bool = False
+    strong_event_ids: tuple[str, ...] = ()
+    reference_event_ids: tuple[str, ...] = ()

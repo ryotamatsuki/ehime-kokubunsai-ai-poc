@@ -13,6 +13,7 @@ import json
 import re
 from typing import Any, Mapping
 
+import age_semantics
 import event_search
 from agent_models import SearchPlan, SearchSpec, WriterOutput
 from app_config import CITY_ALIASES, GENRE_ALIASES, POC_REFERENCE_DATE, REGION_CITIES
@@ -26,8 +27,15 @@ _VALID_VENUES = frozenset({"屋内", "室内", "屋外", "indoor", "outdoor"})
 _VALID_TIME_SLOTS = frozenset({"午前", "午後", "夕方"})
 # The matcher has a single child-friendly boolean, not a family audience
 # taxonomy.  Do not accept labels that would otherwise be silently ignored.
-_VALID_AGE_GROUPS = frozenset({"child", "children", "小学生", "子ども", "こども"})
-_VALID_AGE_INTENTS = frozenset({"recommended", "対象", "おすすめ", "推奨"})
+_VALID_AGE_GROUPS = frozenset(
+    {
+        *age_semantics.AGE_GROUPS,
+        # Keep legacy aliases accepted at the validation boundary for old
+        # planner fixtures; fallback plans always emit canonical values.
+        "child", "children", "小学生", "子ども", "こども",
+    }
+)
+_VALID_AGE_INTENTS = frozenset({*age_semantics.AGE_INTENTS, "対象", "おすすめ", "推奨"})
 _RELAXABLE_FILTERS = frozenset(
     {"soft_terms", "genres", "genre_groups", "child_friendly", "venue", "rain_preferred", "entry_free", "max_entry_fee"}
 )
@@ -323,7 +331,7 @@ def _clean_soft_terms(values: list[str], query: str) -> list[str]:
     generic = {
         "イベント", "ある", "ありますか", "探して", "探す", "楽しめる", "楽しみたい",
         "行ける", "行きたい", "おすすめ", "どれくらい", "どのくらい", "どの程度",
-        "何件", "いくつ", "件数", "何個", "好き", "興味", "がいい", "が好き",
+        "何件", "いくつ", "いくつくらい", "何件くらい", "何個くらい", "件数", "何個", "好き", "興味", "がいい", "が好き",
     }
     terms: list[str] = []
     for value in values:
@@ -369,16 +377,29 @@ def fallback_search_plan(query: str, reference_date=POC_REFERENCE_DATE) -> Searc
         filters["paid_only"] = True
     if parsed.max_entry_fee is not None:
         filters["max_entry_fee"] = parsed.max_entry_fee
+    if parsed.reservation_required is not None:
+        filters["reservation_required"] = parsed.reservation_required
     if parsed.time_slots:
         filters["time_slots"] = list(parsed.time_slots)
     if parsed.time_after is not None:
         filters["time_after"] = parsed.time_after
 
-    age_match = re.search(r"(\d{1,2})歳", event_search.normalize_query(query))
-    if age_match:
-        filters["age"] = int(age_match.group(1))
-        filters["age_intent"] = "recommended"
+    age_query = age_semantics.query_age_semantics(query)
+    if age_query.age is not None:
+        filters["age"] = age_query.age
+    if age_query.age_group is not None:
+        filters["age_group"] = age_query.age_group
+    if age_query.age_intent is not None:
+        filters["age_intent"] = age_query.age_intent
+    if age_query.recognized:
         filters["child_friendly"] = True
+
+    # These expressions are intentionally semantic constraints.  Keep the
+    # exact vocabulary in the fallback so a failed Modal call cannot turn
+    # them into soft keywords or silently discard them.
+    normalized_query = event_search.normalize_query(query)
+    if parsed.venue is None and any(term in normalized_query for term in ("建物の中", "建物内", "建物", "中でやる")):
+        filters["venue"] = "屋内"
 
     soft_terms = _clean_soft_terms(list(parsed.soft_terms), query)
     if soft_terms:

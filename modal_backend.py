@@ -13,6 +13,8 @@ MODEL_ID = "sbintuitions/sarashina2.2-3b-instruct-v0.1"
 MODEL_DIR = "/models/sarashina"
 MAX_INPUT_TOKENS = 7200
 MAX_NEW_TOKENS = 320
+PLANNER_MAX_NEW_TOKENS = 256
+WRITER_MAX_NEW_TOKENS = 220
 MAX_CANDIDATES = 8
 SERVICE_ID = "ehime-kokubunsai-ai-poc"
 
@@ -82,6 +84,18 @@ search_events/count_eventsのfiltersには、dates、municipalities、regions、
 genre_groups、age、age_group、age_intent、child_friendly、venue、entry_free、
 paid_only、max_entry_fee、reservation_required、rain_preferred、time_slots、
 time_after、soft_termsだけを使ってください。
+
+意味の対応例:
+- 「5歳」「5才」→ age=5, age_group=preschool
+- 「幼稚園児」「未就学児」「幼児」「保育園児」→ age_group=preschool
+- 「小学生」→ age_group=elementary
+- 「楽しめる」「おすすめ」→ age_intent=recommended
+- 「参加できる」→ age_intent=eligible
+- 「建物の中」「建物内」→ venue=indoor
+- 「予約なし」「申込不要」→ reservation_required=false
+- 「いくつ」「何件」→ answer_type=count と count_events
+age_groupはpreschool, elementary, junior_high, high_school, adultのいずれか、
+age_intentはrecommendedまたはeligibleだけを使ってください。
 
 Plannerは検索を実行しません。曖昧な探索では、まず厳しい条件のsearchesを1件返し、
 soft_termsで0件になりそうな場合だけallow_replanをtrueにしてください。
@@ -307,17 +321,38 @@ class EhimeCulturalGuide:
             add_generation_prompt=True,
             return_tensors="pt",
         ).to(self.model.device)
+        if mode == "planner":
+            # Planner output is a small machine-readable SearchPlan.  Keep it
+            # deterministic and do not pass sampling-only kwargs at all.
+            generation_kwargs = {
+                "max_new_tokens": PLANNER_MAX_NEW_TOKENS,
+                "do_sample": False,
+                "repetition_penalty": 1.02,
+            }
+        elif mode == "writer":
+            generation_kwargs = {
+                "max_new_tokens": WRITER_MAX_NEW_TOKENS,
+                "do_sample": True,
+                "temperature": 0.65,
+                "top_p": 0.9,
+                "repetition_penalty": 1.05,
+            }
+        else:
+            generation_kwargs = {
+                "max_new_tokens": MAX_NEW_TOKENS,
+                "do_sample": True,
+                "temperature": 0.65,
+                "top_p": 0.9,
+                "repetition_penalty": 1.05,
+            }
+        generation_kwargs.update(
+            {
+                "pad_token_id": self.tokenizer.eos_token_id,
+                "eos_token_id": self.tokenizer.eos_token_id,
+            }
+        )
         with torch.inference_mode():
-            output_ids = self.model.generate(
-                input_ids,
-                max_new_tokens=MAX_NEW_TOKENS,
-                do_sample=True,
-                temperature=0.65,
-                top_p=0.9,
-                repetition_penalty=1.05,
-                pad_token_id=self.tokenizer.eos_token_id,
-                eos_token_id=self.tokenizer.eos_token_id,
-            )
+            output_ids = self.model.generate(input_ids, **generation_kwargs)
         generated_ids = output_ids[0, input_ids.shape[-1] :]
         answer = self.tokenizer.decode(generated_ids, skip_special_tokens=True).strip()
         return {"service_id": SERVICE_ID, "answer": answer}
