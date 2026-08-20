@@ -37,15 +37,23 @@ jobs:
         run: python tests/run_agentic_search_qa.py
       - name: Security QA
         run: python tests/run_security_qa.py
-      - name: Debug final gate plan
+      - name: Debug final gate plans
         run: |
           python - <<'PY'
           from agent_planner import fallback_search_plan
           from event_search import parse_query
           from app_config import POC_REFERENCE_DATE
-          q = '建物の中でやるイベントはいくつくらい？'
-          print('legacy soft_terms:', parse_query(q, POC_REFERENCE_DATE).soft_terms)
-          print('fallback filters:', fallback_search_plan(q).searches[0].filters)
+          queries = (
+              '建物の中でやるイベントはいくつくらい？',
+              '予約なしで参加できる松山のイベント',
+              '雨の日でも大丈夫で、お金のかからないイベント',
+              '5歳が楽しめるイベントある？',
+              '幼稚園児が楽しめるイベント',
+          )
+          for q in queries:
+              print('QUERY:', q)
+              print('legacy soft_terms:', parse_query(q, POC_REFERENCE_DATE).soft_terms)
+              print('fallback filters:', fallback_search_plan(q).searches[0].filters)
           PY
       - name: Final Gate QA
         run: python tests/run_final_gate_qa.py
