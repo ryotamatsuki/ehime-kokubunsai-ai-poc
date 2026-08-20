@@ -166,6 +166,317 @@ def normalize_query(value: str) -> str:
     return re.sub(r"\s+", " ", normalized).strip()
 
 
+@dataclass(frozen=True)
+class QueryTermAnalysis:
+    """Separate parser-known topics from text the parser cannot interpret."""
+
+    known_topics: tuple[str, ...] = ()
+    unknown_residual: tuple[str, ...] = ()
+
+    @property
+    def has_unknown_residual(self) -> bool:
+        return bool(self.unknown_residual)
+
+
+_TOPIC_CONTROL_MARKERS = (
+    "イベント", "楽し", "行きたい", "行ける", "含めて", "一緒", "みんな",
+    "家族", "子ども", "子供", "こども", "親子", "ファミリー",
+    "建物の中", "建物内", "屋内", "屋外",
+)
+
+
+def topics_to_legacy_soft_terms(topics: Iterable[str] | str | None) -> list[str]:
+    """Convert explicit semantic ``topics`` to legacy ``soft_terms`` only.
+
+    The caller must supply topics that were already extracted as semantic
+    slots.  This function deliberately does not parse a raw query, apply the
+    legacy synonym table, or inspect any residual text.  Consequently, an
+    unknown residual cannot become a search condition through this boundary.
+    """
+
+    if topics is None:
+        return []
+    values = (topics,) if isinstance(topics, str) else topics
+    terms: list[str] = []
+    for value in values:
+        if not isinstance(value, str):
+            continue
+        term = normalize_query(value)
+        if not term or len(term) > 80 or "\x00" in term:
+            continue
+        if age_semantics.is_age_query_term(term):
+            continue
+        normalized_audience = age_semantics.normalize_audience(term)
+        if normalized_audience is not None:
+            continue
+        if term in _GENERIC_STOPWORDS or any(marker in term for marker in _TOPIC_CONTROL_MARKERS):
+            continue
+        if term not in terms:
+            terms.append(term)
+    return terms
+
+
+def topics_to_soft_terms(topics: Iterable[str] | str | None) -> list[str]:
+    """Public short name for :func:`topics_to_legacy_soft_terms`."""
+
+    return topics_to_legacy_soft_terms(topics)
+
+
+def _command_slot_value(slots: Any, name: str, default: Any = None) -> Any:
+    if isinstance(slots, Mapping):
+        return slots.get(name, default)
+    return getattr(slots, name, default)
+
+
+def _command_slot_strings(value: Any, field_name: str) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        values = [value]
+    elif isinstance(value, (tuple, list)):
+        values = list(value)
+    else:
+        raise ValueError(f"{field_name} must be a string sequence")
+    if not all(isinstance(item, str) for item in values):
+        raise ValueError(f"{field_name} must contain only strings")
+    return [normalize_query(item) for item in values if normalize_query(item)]
+
+
+def _canonical_municipalities(values: Iterable[str]) -> list[str]:
+    canonical: list[str] = []
+    for value in values:
+        municipality = CITY_ALIASES.get(value)
+        if municipality is None:
+            raise ValueError(f"unknown municipality: {value}")
+        if municipality not in canonical:
+            canonical.append(municipality)
+    return canonical
+
+
+def _canonical_regions(values: Iterable[str]) -> list[str]:
+    canonical: list[str] = []
+    for value in values:
+        if value not in REGION_CITIES:
+            raise ValueError(f"unknown region: {value}")
+        if value not in canonical:
+            canonical.append(value)
+    return canonical
+
+
+def _canonical_genres(values: Iterable[str]) -> list[str]:
+    canonical: list[str] = []
+    for value in values:
+        if value in GENRE_ALIASES:
+            genre = value
+        else:
+            genre = next(
+                (
+                    label
+                    for label, aliases in GENRE_ALIASES.items()
+                    if value in aliases
+                ),
+                None,
+            )
+        if genre is None:
+            raise ValueError(f"unknown genre: {value}")
+        if genre not in canonical:
+            canonical.append(genre)
+    return canonical
+
+
+def _canonical_dates(values: Iterable[str]) -> list[str]:
+    canonical: list[str] = []
+    for value in values:
+        try:
+            normalized = date.fromisoformat(value).isoformat()
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"invalid command date: {value}") from exc
+        if normalized not in canonical:
+            canonical.append(normalized)
+    return canonical
+
+
+def _canonical_command_venue(value: Any) -> str | None:
+    if value is None:
+        return None
+    normalized = normalize_query(str(value)).lower()
+    if normalized in {"屋内", "室内", "indoor"}:
+        return "屋内"
+    if normalized in {"屋外", "outdoor"}:
+        return "屋外"
+    raise ValueError(f"unknown venue: {value}")
+
+
+def command_slots_to_search_filters(
+    slots: Any,
+    *,
+    flow: str | None = None,
+    reference_date: date = POC_REFERENCE_DATE,
+) -> SearchFilters:
+    """Adapt semantic CommandSlots to the existing deterministic filter.
+
+    ``slots`` is intentionally duck-typed so this module does not depend on a
+    command-model module owned by another implementation agent.  Mapping and
+    dataclass-style objects are both accepted.  Command-only fields such as
+    references, visit counts, and unknown residual text are ignored.  Only the
+    explicit ``topics`` slot is allowed to populate legacy ``soft_terms``.
+    """
+
+    if slots is None:
+        raise TypeError("CommandSlots is required")
+    # Accept a CommandPlan-like wrapper without importing the future command
+    # model.  A real CommandSlots object has ``topics`` directly.
+    if not isinstance(slots, Mapping) and not hasattr(slots, "topics") and hasattr(slots, "slots"):
+        slots = slots.slots
+
+    dates = _canonical_dates(_command_slot_strings(_command_slot_value(slots, "dates"), "dates"))
+    municipalities = _canonical_municipalities(
+        _command_slot_strings(_command_slot_value(slots, "municipalities"), "municipalities")
+    )
+    regions = _canonical_regions(
+        _command_slot_strings(_command_slot_value(slots, "regions"), "regions")
+    )
+    genres = _canonical_genres(
+        _command_slot_strings(_command_slot_value(slots, "genres"), "genres")
+    )
+
+    age = _command_slot_value(slots, "age")
+    audience = _command_slot_value(slots, "audience")
+    requested_age_group = _command_slot_value(slots, "age_group")
+    age_semantics_result = age_semantics.resolve_audience_age(
+        audience=audience,
+        age=age,
+        age_group=requested_age_group,
+    )
+    age_group = age_semantics_result.age_group
+
+    age_intent = _command_slot_value(slots, "age_intent")
+    if age_intent is not None:
+        age_intent = {
+            "おすすめ": "recommended",
+            "推奨": "recommended",
+            "対象": "eligible",
+        }.get(str(age_intent), str(age_intent))
+        if age_intent not in age_semantics.AGE_INTENTS:
+            raise ValueError(f"unknown age_intent: {age_intent}")
+
+    time_slots = _command_slot_strings(_command_slot_value(slots, "time_slots"), "time_slots")
+    if any(value not in {"午前", "午後", "夕方"} for value in time_slots):
+        raise ValueError("unknown time slot")
+
+    time_after = _command_slot_value(slots, "time_after")
+    if time_after is not None and (
+        isinstance(time_after, bool)
+        or not isinstance(time_after, int)
+        or not 0 <= time_after <= 24 * 60
+    ):
+        raise ValueError("time_after must be minutes from 0 to 1440")
+
+    max_entry_fee = _command_slot_value(slots, "max_entry_fee")
+    if max_entry_fee is not None and (
+        isinstance(max_entry_fee, bool)
+        or not isinstance(max_entry_fee, int)
+        or max_entry_fee < 0
+    ):
+        raise ValueError("max_entry_fee must be a non-negative integer")
+
+    boolean_fields = (
+        "entry_free", "paid_only", "reservation_required", "rain_preferred",
+    )
+    boolean_values: dict[str, bool | None] = {}
+    for field_name in boolean_fields:
+        value = _command_slot_value(slots, field_name)
+        if value is not None and not isinstance(value, bool):
+            raise ValueError(f"{field_name} must be boolean or null")
+        boolean_values[field_name] = value
+
+    topic_terms = topics_to_legacy_soft_terms(_command_slot_value(slots, "topics"))
+    flow_name = flow or _command_slot_value(slots, "flow")
+    intent = {
+        "find_events": "discover",
+        "count_events": "count",
+        "event_detail": "lookup",
+    }.get(flow_name, "discover")
+    if flow_name is not None:
+        try:
+            from flow_registry import FLOW_REGISTRY
+        except ImportError:  # pragma: no cover - standalone compatibility
+            registered_flows = {
+                "find_events", "count_events", "event_detail", "recommend_next",
+                "recommend_similar", "plan_event_pair", "general_faq", "unsupported",
+            }
+        else:
+            registered_flows = FLOW_REGISTRY
+        if flow_name not in registered_flows:
+            raise ValueError(f"unknown flow: {flow_name}")
+
+    return SearchFilters(
+        dates=dates,
+        city=municipalities[0] if len(municipalities) == 1 else None,
+        region=regions[0] if len(regions) == 1 else None,
+        city_groups=[municipalities] if municipalities else [],
+        region_groups=[regions] if regions else [],
+        genres=genres,
+        # CommandSlots carries a flat, already semantic list.  Preserve each
+        # requested genre as an AND group; an OR distinction belongs in the
+        # command model rather than being guessed here.
+        genre_groups=[[genre] for genre in genres],
+        child_friendly=age_semantics_result.child_friendly,
+        age=age,
+        age_group=age_group,
+        age_intent=age_intent,
+        venue=_canonical_command_venue(_command_slot_value(slots, "venue")),
+        rain_preferred=boolean_values["rain_preferred"] is True,
+        entry_free=boolean_values["entry_free"],
+        paid_only=boolean_values["paid_only"] is True,
+        reservation_required=boolean_values["reservation_required"],
+        max_entry_fee=max_entry_fee,
+        time_slots=time_slots,
+        time_after=time_after,
+        keywords=list(topic_terms),
+        soft_terms=list(topic_terms),
+        intent=intent,
+    )
+
+
+def search_filters_from_command_slots(
+    slots: Any,
+    *,
+    flow: str | None = None,
+    reference_date: date = POC_REFERENCE_DATE,
+) -> SearchFilters:
+    """Compatibility alias for :func:`command_slots_to_search_filters`."""
+
+    return command_slots_to_search_filters(
+        slots,
+        flow=flow,
+        reference_date=reference_date,
+    )
+
+
+def analyze_query_terms(query: str) -> QueryTermAnalysis:
+    """Expose known topics and unknown residuals without executing a search."""
+
+    known = [
+        term
+        for term in _extract_soft_terms(query, include_unknown_residual=False)
+        if not age_semantics.is_age_query_term(term)
+    ]
+    legacy = [
+        term
+        for term in _extract_soft_terms(query, include_unknown_residual=True)
+        if not age_semantics.is_age_query_term(term)
+    ]
+    unknown = tuple(term for term in legacy if term not in known)
+    return QueryTermAnalysis(tuple(known), unknown)
+
+
+def unknown_query_residuals(query: str) -> tuple[str, ...]:
+    """Return parser residuals that must not be promoted by the command path."""
+
+    return analyze_query_terms(query).unknown_residual
+
+
 def _compact_intent_text(value: str) -> str:
     return re.sub(r"[\W_]+", "", normalize_query(value), flags=re.UNICODE)
 
@@ -467,7 +778,15 @@ def _genre_soft_terms(query: str) -> list[str]:
     return terms
 
 
-def _extract_soft_terms(query: str) -> list[str]:
+def _extract_soft_terms(query: str, *, include_unknown_residual: bool = False) -> list[str]:
+    """Extract legacy terms, optionally retaining unknown parser residue.
+
+    The strict default is used by the semantic boundary: only terms known to
+    the deterministic search vocabulary are returned.  The explicit legacy
+    mode remains available to preserve the existing fallback parser contract
+    while the CommandSlots path is rolled out.
+    """
+
     normalized = normalize_query(query)
     work = _remove_question_language(normalized)
 
@@ -509,16 +828,18 @@ def _extract_soft_terms(query: str) -> list[str]:
     control_terms = set(_GENERIC_STOPWORDS) | set(CHILD_TERMS) | set(INDOOR_TERMS) | set(OUTDOOR_TERMS) | set(RAIN_TERMS) | set(FREE_TERMS) | set(PAID_TERMS) | set(NEAR_TERMS) | {
         "予約なし", "予約不要", "予約はいらない", "予約いらない", "申込不要", "申し込み不要",
         "申込なし", "申し込みなし", "建物の中", "建物内", "建物", "中でやる",
+        "含めて", "一緒", "みんな",
         "か", "または", "と", "で", "の", "は", "が", "を", "に", "や", "へ", "も",
     }
     for term in sorted(control_terms, key=len, reverse=True):
         work = work.replace(term, " ")
-    tokens = re.findall(r"[一-龥々ぁ-んァ-ヶA-Za-z][一-龥々ぁ-んァ-ヶA-Za-z0-9ー・]{1,}", work)
-    for token in tokens:
-        token = re.sub(r"^[はがをにでとやへも]+", "", token)
-        token = re.sub(r"[はがをにでとやへも]+$", "", token)
-        if len(token) >= 2 and token not in _GENERIC_STOPWORDS:
-            terms.append(token)
+    if include_unknown_residual:
+        tokens = re.findall(r"[一-龥々ぁ-んァ-ヶA-Za-z][一-龥々ぁ-んァ-ヶA-Za-z0-9ー・]{1,}", work)
+        for token in tokens:
+            token = re.sub(r"^[はがをにでとやへも]+", "", token)
+            token = re.sub(r"[はがをにでとやへも]+$", "", token)
+            if len(token) >= 2 and token not in _GENERIC_STOPWORDS:
+                terms.append(token)
     result: list[str] = []
     hard_control_terms = set(CHILD_TERMS) | set(INDOOR_TERMS) | set(OUTDOOR_TERMS) | set(RAIN_TERMS) | set(FREE_TERMS) | set(PAID_TERMS) | set(NEAR_TERMS)
     for term in terms:
@@ -549,7 +870,20 @@ def _extract_entity(soft_terms: list[str], query: str) -> str | None:
     return soft_terms[0] if soft_terms and _requested_field(query) else None
 
 
-def parse_query(query: str, reference_date: date = POC_REFERENCE_DATE) -> SearchFilters:
+def parse_query(
+    query: str,
+    reference_date: date = POC_REFERENCE_DATE,
+    *,
+    include_unknown_residual: bool = True,
+) -> SearchFilters:
+    """Parse a legacy free-form query into deterministic SearchFilters.
+
+    ``include_unknown_residual`` defaults to ``True`` for compatibility with
+    the existing fallback QA.  New semantic-command code must leave it off or
+    use :func:`command_slots_to_search_filters`; unknown residual text is not
+    promoted by that path.
+    """
+
     normalized = normalize_query(query)
     age_query = age_semantics.query_age_semantics(normalized)
     dates, invalid_date = _query_dates(normalized, reference_date)
@@ -557,7 +891,14 @@ def parse_query(query: str, reference_date: date = POC_REFERENCE_DATE) -> Search
     region_found = [region for region in REGION_CITIES if region in normalized]
     region_groups = [region_found] if len(region_found) > 1 and re.search(r"か|または", normalized) else [[region] for region in region_found]
     genres, genre_groups = _extract_genre_groups(normalized)
-    soft_terms = [term for term in _extract_soft_terms(normalized) if not age_semantics.is_age_query_term(term)]
+    soft_terms = [
+        term
+        for term in _extract_soft_terms(
+            normalized,
+            include_unknown_residual=include_unknown_residual,
+        )
+        if not age_semantics.is_age_query_term(term)
+    ]
     requested_field = _requested_field(normalized)
     child_requested = any(term in normalized for term in CHILD_TERMS) or bool(
         re.search(r"(?:小|小学)\s*[1-6](?:年生)?", normalized)
@@ -565,7 +906,7 @@ def parse_query(query: str, reference_date: date = POC_REFERENCE_DATE) -> Search
     venue = (
         "屋内"
         if any(term in normalized for term in INDOOR_TERMS)
-        or any(term in normalized for term in ("建物の中", "建物内", "建物", "中でやる"))
+        or any(term in normalized for term in ("建物の中", "建物内", "中でやる"))
         else "屋外"
         if any(term in normalized for term in OUTDOOR_TERMS)
         else None
@@ -585,10 +926,16 @@ def parse_query(query: str, reference_date: date = POC_REFERENCE_DATE) -> Search
     city = city_groups[0][0] if len(city_groups) == 1 and len(city_groups[0]) == 1 else None
     region = region_groups[0][0] if len(region_groups) == 1 and len(region_groups[0]) == 1 else None
     intent = classify_intent(normalized, _parsed_hint=True, parsed_values=(soft_terms, requested_field))
+    child_friendly = age_semantics.child_friendly_for_request(
+        age=age_query.age,
+        age_group=age_query.age_group,
+    )
+    if child_requested:
+        child_friendly = True
     return SearchFilters(
         dates=[day.isoformat() for day in dates], city=city, region=region,
         city_groups=city_groups, region_groups=region_groups, genres=genres, genre_groups=genre_groups,
-        child_friendly=True if child_requested or age_query.recognized else None,
+        child_friendly=child_friendly,
         age=age_query.age, age_group=age_query.age_group, age_intent=age_query.age_intent,
         venue=venue,
         rain_preferred=any(term in normalized for term in RAIN_TERMS),
@@ -599,6 +946,16 @@ def parse_query(query: str, reference_date: date = POC_REFERENCE_DATE) -> Search
         reservation_required=reservation_required,
         intent=intent, entity=_extract_entity(soft_terms, normalized), requested_field=requested_field,
         invalid_date=invalid_date,
+    )
+
+
+def parse_query_strict(query: str, reference_date: date = POC_REFERENCE_DATE) -> SearchFilters:
+    """Parse only deterministic/known terms; keep unknown residual separate."""
+
+    return parse_query(
+        query,
+        reference_date,
+        include_unknown_residual=False,
     )
 
 
@@ -723,6 +1080,14 @@ def _matches_hard(event: Mapping[str, Any], filters: SearchFilters) -> bool:
             return False
     if filters.child_friendly is True and event["子ども向け"] is not True:
         return False
+    if filters.age is not None or filters.age_group:
+        if not age_semantics.matches_event_age(
+            event,
+            age=filters.age,
+            age_group=filters.age_group,
+            age_intent=filters.age_intent,
+        ):
+            return False
     if filters.venue == "屋内" and event["屋内/屋外"] != "屋内":
         return False
     if filters.venue == "屋外" and "屋外" not in str(event["屋内/屋外"]):
@@ -897,7 +1262,7 @@ def attribute_answer(event: Mapping[str, Any], requested_field: str) -> str:
         "place": f"「{name}」の場所は、{event['場所']}です。",
         "fee": f"「{name}」の料金は、{event['料金']}です。",
         "genre": f"「{name}」のジャンルは、{event['ジャンル']}です。",
-        "child_friendly": f"「{name}」は、{'子ども向け' if event['子ども向け'] else '一般向け'}です。",
+        "child_friendly": f"「{name}」は、{'子ども向け' if event['子ども向け'] else '子ども向けの設定はありません'}。",
         "venue": f"「{name}」の会場は、{event['屋内/屋外']}です。",
         "overview": f"「{name}」は、{event['概要']}",
     }
@@ -932,7 +1297,7 @@ def search_events(query: str, events: Iterable[dict[str, Any]] | None = None, re
     source_events = load_events() if events is None else list(events)
     if filters.invalid_date and not filters.dates:
         return SearchResult([], filters, "no_results", "その日付は確認できんかったよ。別の日付で探してみて。")
-    has_condition = bool(filters.dates or filters.city_groups or filters.region_groups or filters.genre_groups or filters.child_friendly or filters.venue or filters.rain_preferred or filters.entry_free or filters.paid_only or filters.max_entry_fee is not None or filters.time_slots or filters.time_after is not None or filters.soft_terms)
+    has_condition = bool(filters.dates or filters.city_groups or filters.region_groups or filters.genre_groups or filters.child_friendly or filters.age is not None or filters.age_group or filters.venue or filters.rain_preferred or filters.entry_free or filters.paid_only or filters.max_entry_fee is not None or filters.time_slots or filters.time_after is not None or filters.soft_terms)
     if not has_condition:
         return SearchResult([], filters, "needs_condition", "いつ頃・どの地域のイベントを探しよる？ 「今日」「今週末」のように教えてみて。")
     selected, total = _search_with_filters(source_events, filters, reference_date, limit)

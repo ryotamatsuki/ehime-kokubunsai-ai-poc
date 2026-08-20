@@ -14,6 +14,12 @@ import re
 from typing import Any, Mapping
 
 import age_semantics
+from command_generator import (
+    CommandGenerationResult,
+    CommandPlan,
+    DEFAULT_COMMAND_FORMAT,
+    generate_command,
+)
 import event_search
 from agent_models import SearchPlan, SearchSpec, WriterOutput
 from app_config import CITY_ALIASES, GENRE_ALIASES, POC_REFERENCE_DATE, REGION_CITIES
@@ -75,7 +81,9 @@ def _extract_json(value: Any) -> dict[str, Any] | None:
     return dict(parsed) if isinstance(parsed, dict) else None
 
 
-def _call_modal_json(config: ModalConfig | None, payload: Mapping[str, Any]) -> dict[str, Any] | None:
+def _call_modal_raw(config: ModalConfig | None, payload: Mapping[str, Any]) -> Any:
+    """Return the untrusted Modal answer for command parse/repair handling."""
+
     if config is None or not all(isinstance(value, str) and value.strip() for value in (config.url, config.key, config.secret)):
         return None
     try:
@@ -99,9 +107,13 @@ def _call_modal_json(config: ModalConfig | None, payload: Mapping[str, Any]) -> 
         body = response.json()
         if not isinstance(body, dict) or body.get("service_id") != "ehime-kokubunsai-ai-poc":
             return None
-        return _extract_json(body.get("answer"))
+        return body.get("answer")
     except (requests.RequestException, ValueError, TypeError):
         return None
+
+
+def _call_modal_json(config: ModalConfig | None, payload: Mapping[str, Any]) -> dict[str, Any] | None:
+    return _extract_json(_call_modal_raw(config, payload))
 
 
 def _validate_filter_value(value: Any, depth: int = 0) -> bool:
@@ -391,14 +403,17 @@ def fallback_search_plan(query: str, reference_date=POC_REFERENCE_DATE) -> Searc
         filters["age_group"] = age_query.age_group
     if age_query.age_intent is not None:
         filters["age_intent"] = age_query.age_intent
-    if age_query.recognized:
+    if age_query.recognized and age_semantics.child_friendly_for_request(
+        age=age_query.age,
+        age_group=age_query.age_group,
+    ) is True:
         filters["child_friendly"] = True
 
     # These expressions are intentionally semantic constraints.  Keep the
     # exact vocabulary in the fallback so a failed Modal call cannot turn
     # them into soft keywords or silently discard them.
     normalized_query = event_search.normalize_query(query)
-    if parsed.venue is None and any(term in normalized_query for term in ("建物の中", "建物内", "建物", "中でやる")):
+    if parsed.venue is None and any(term in normalized_query for term in ("建物の中", "建物内", "中でやる")):
         filters["venue"] = "屋内"
 
     soft_terms = _clean_soft_terms(list(parsed.soft_terms), query)
@@ -476,6 +491,47 @@ def request_search_plan(
         if plan is not None:
             return plan
     return fallback_search_plan(str(context.get("query", "")), POC_REFERENCE_DATE)
+
+
+def request_command_result(
+    context: Mapping[str, Any],
+    modal_config: ModalConfig | None = None,
+    *,
+    output_format: str = DEFAULT_COMMAND_FORMAT,
+) -> CommandGenerationResult:
+    """Generate a validated semantic command without touching SearchPlan.
+
+    The existing planner path remains the compatibility path for the current
+    Agentic Search orchestrator.  This API is the isolated command-mode
+    boundary that a later flow executor can adopt.
+    """
+
+    query = str(context.get("query", ""))[:1200]
+    state = {
+        "reference_date": context.get("reference_date", POC_REFERENCE_DATE.isoformat()),
+        "selected_event_id": context.get("selected_event_id"),
+        "last_result_ids": list(context.get("last_result_ids", []))[:20],
+        "last_command": context.get("last_command"),
+        "active_flow": context.get("active_flow"),
+        "pending_slots": context.get("pending_slots"),
+    }
+    return generate_command(
+        query,
+        state,
+        call=lambda payload: _call_modal_raw(modal_config, payload),
+        output_format=output_format,
+    )
+
+
+def request_command_plan(
+    context: Mapping[str, Any],
+    modal_config: ModalConfig | None = None,
+    *,
+    output_format: str = DEFAULT_COMMAND_FORMAT,
+) -> CommandPlan:
+    """Return only the typed Flow+Slots command for a caller."""
+
+    return request_command_result(context, modal_config, output_format=output_format).plan
 
 
 def request_replan(

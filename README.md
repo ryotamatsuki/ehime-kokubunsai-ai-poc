@@ -20,6 +20,10 @@
 - `agent_orchestrator.py`：曖昧な探索質問だけをPlanner→固定Tool→必要時Replan→Writerへ渡す bounded Agentic Search
 - `agent_tools.py`：LLMが生成した関数名を実行せず、許可済み6種類の決定論的Toolだけを呼び出すDispatcher
 - `agent_planner.py`：Planner／WriterのJSON検証とModal失敗時のローカルfallback
+- `command_generator.py`：自然文を検証済みのSemantic Command（Flow＋Slots）へ変換（通常1回、修復は最大1回）
+- `command_models.py` / `flow_registry.py`：CommandPlanの厳格な契約とFlow Registry（ツール名はLLMへ公開しない）
+- `command_orchestrator.py`：Registryから固定Python executorを選び、イベント事実・件数・参加可否をローカルデータから確定
+- `event_pair_recommendation.py`：同日イベントの組み合わせを30分／60分の明示的なPoC仮定で決定
 - `data/search_metadata.json`：イベント事実を変更せずに別名・検索タグを管理
 - `data/events.schema.json`：v2イベントデータの構造契約
 - Modal：`sbintuitions/sarashina2.2-3b-instruct-v0.1` をT4・4bitで実行
@@ -60,6 +64,18 @@ python tests/run_agentic_search_qa.py
 Agentic Searchは、既存Parserで明確に処理できるイベント名・料金・申込・推薦・FAQを経由しません。
 曖昧な探索だけを対象にし、Plannerは検索せず、Writerは件数やイベント事実を書きません。
 件数・候補・イベント事実は固定Toolと`data/events.json`から決定します。
+
+## Semantic Command QA
+
+Semantic Commandは、LLMを自然文の構造化だけに使い、Flowの実行・イベント事実・件数・料金・申込要否・組み合わせ可否は決定論的なPythonと`data/events.json`で確定します。
+日付・時刻のpending回答、前回結果の絞り込み、成人と子ども向けの意味、屋内条件と「歴史的な建物」のテーマも検証対象です。
+
+```bash
+python tests/run_command_semantic_qa.py
+```
+
+評価データは`tests/data/command_semantic_eval.json`のDEV/HOLDOUTに分離しています。
+本番のModal推論・Streamlit表示確認は、必要なSecretsとデプロイ環境を設定したうえで手動確認してください。
 
 ## 必要なSecrets
 
