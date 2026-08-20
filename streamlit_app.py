@@ -13,7 +13,7 @@ import streamlit as st
 import event_search
 import event_details
 import event_recommendation
-import faq_search
+from conversation_router import route_conversation
 from app_config import (
     MAX_EVENT_CANDIDATES,
     POC_REFERENCE_DATE,
@@ -125,77 +125,6 @@ def _facts_answer(
         for event in events
     )
     return "\n".join(lines)
-
-
-def _is_pronoun_reference(query: str) -> bool:
-    normalized = event_search.normalize_query(query)
-    return "それ" in normalized or "そのイベント" in normalized
-
-
-def _contains_named_event_context(query: str) -> bool:
-    normalized = event_search.normalize_query(query)
-    return any(
-        token in normalized
-        for event in event_search.load_events()
-        for token in (
-            str(event["イベント名"]).replace("【PoC架空】", ""),
-            *[str(alias) for alias in event.get("aliases", []) if len(str(alias)) >= 2],
-        )
-        if len(token) >= 2
-    )
-
-
-def _is_detail_followup_without_new_search(query: str, detail_field: str | None) -> bool:
-    if not detail_field:
-        return False
-    if _contains_named_event_context(query):
-        return False
-    normalized = event_search.normalize_query(query)
-    explicit_search_terms = (
-        "イベント",
-        "探し",
-        "今日",
-        "本日",
-        "明日",
-        "今週",
-        "来週",
-        "月",
-        "市",
-        "町",
-        "東予",
-        "中予",
-        "南予",
-        "似た",
-        "同じ系統",
-    )
-    return not any(term in normalized for term in explicit_search_terms)
-
-
-def _is_general_faq_context(query: str, faq_match: faq_search.FAQMatch | None) -> bool:
-    if faq_match is None:
-        return False
-    normalized = event_search.normalize_query(query)
-    named_event = _contains_named_event_context(query)
-    filters = event_search.parse_query(normalized, POC_REFERENCE_DATE)
-    has_event_context = bool(
-        named_event or filters.dates or filters.city_groups or filters.region_groups
-    )
-
-    # These FAQ categories are general unless the user supplied a concrete
-    # event/date/place context.  This keeps “これは公式？” and “近くで
-    # 探したい” out of the event search path while preserving event-specific
-    # follow-ups such as “オープニングは予約いる？”.
-    if faq_match.faq_id in {"faq-001", "faq-003", "faq-008"} and not has_event_context:
-        return True
-    if faq_match.faq_id == "faq-002" and not has_event_context and "イベント" not in normalized:
-        return True
-    if event_details.detect_detail_field(query) and not named_event and not any(
-        term in normalized for term in ("イベント", "探し", "おすすめ", "楽しめる", "楽しみたい", "見たい", "行きたい")
-    ):
-        return True
-    if has_event_context or any(term in normalized for term in ("イベント", "探し", "今日の", "明日の", "月", "市", "町", "東予", "中予", "南予")):
-        return False
-    return not filters.soft_terms and not filters.dates and not filters.city_groups and not filters.region_groups
 
 
 def _recommendation_preferences(query: str) -> dict[str, object]:
@@ -559,22 +488,21 @@ if prompt:
     filters: event_search.SearchFilters | None = None
     search_result: event_search.SearchResult | None = None
     previous_results = list(st.session_state.get("last_results", []))
-    detail_field = event_details.detect_detail_field(prompt)
-    faq_match = faq_search.find_faq(prompt)
-    reference_index = event_search.resolve_reference_index(prompt, len(previous_results))
+    route = route_conversation(
+        prompt,
+        previous_results,
+        st.session_state.get("selected_event"),
+        st.session_state.get("last_filters"),
+        POC_REFERENCE_DATE,
+    )
+    detail_field = route.detail_field
 
-    if previous_results and (
-        reference_index is not None or _is_pronoun_reference(prompt)
-    ):
+    if route.action_type == "reference_followup":
         # Ordinals and pronouns resolve against the last exact result set.
         # Participation facts are answered locally and never sent to Modal.
         filters = event_search.parse_query(prompt, POC_REFERENCE_DATE)
-        if reference_index is not None:
-            selected_event = previous_results[reference_index]
-        elif st.session_state.get("selected_event"):
-            selected_event = st.session_state.selected_event
-        elif len(previous_results) == 1:
-            selected_event = previous_results[0]
+        if route.selected_event is not None:
+            selected_event = dict(route.selected_event)
         if selected_event and detail_field:
             answer = event_details.answer_event_detail(selected_event, detail_field, prompt)
             results = previous_results
@@ -587,74 +515,68 @@ if prompt:
         else:
             answer = "どのイベントを指しているか、番号かイベント名を教えてみて。"
             results = previous_results
-    elif detail_field and _is_detail_followup_without_new_search(prompt, detail_field) and (
-        st.session_state.get("selected_event") is not None or len(previous_results) == 1
-    ):
-        selected_event = st.session_state.get("selected_event") or previous_results[0]
+    elif route.action_type == "detail_followup":
+        selected_event = dict(route.selected_event) if route.selected_event is not None else None
         answer = event_details.answer_event_detail(selected_event, detail_field, prompt)
         results = previous_results
-    elif event_recommendation.is_next_query(prompt):
-        selected_event = st.session_state.get("selected_event")
-        if selected_event is None and len(previous_results) == 1:
-            selected_event = previous_results[0]
-        if selected_event is None:
-            answer = (
-                faq_match.answer
-                if _is_general_faq_context(prompt, faq_match)
-                else "まずイベントを1件選んでから、「このあと何か行ける？」と聞いてみて。"
-            )
+    elif route.action_type == "recommend_next_without_selection":
+        answer = "まずイベントを1件選んでから、「このあと何か行ける？」と聞いてみて。"
+        results = previous_results
+    elif route.action_type == "recommend_next":
+        selected_event = dict(route.selected_event) if route.selected_event is not None else None
+        source_events = event_search.load_events()
+        if selected_event is None or not event_details.V2_FIELDS.issubset(selected_event) or any(
+            not event_details.V2_FIELDS.issubset(event) for event in source_events
+        ):
+            answer = "次のイベント推薦に必要な構造化データが、まだ読み込み中です。少し待ってからもう一度試してみて。"
             results = previous_results
         else:
-            source_events = event_search.load_events()
-            if not event_details.V2_FIELDS.issubset(selected_event) or any(
-                not event_details.V2_FIELDS.issubset(event) for event in source_events
-            ):
-                answer = "次のイベント推薦に必要な構造化データが、まだ読み込み中です。少し待ってからもう一度試してみて。"
+            date_resolution = event_recommendation.resolve_recommendation_date(
+                selected_event,
+                prompt,
+                POC_REFERENCE_DATE,
+                previous_filters=st.session_state.get("last_filters"),
+            )
+            if date_resolution.recommendation_date is None:
+                answer = date_resolution.message
                 results = previous_results
             else:
                 recommendation = event_recommendation.recommend_next_events(
                     selected_event,
                     source_events,
-                    POC_REFERENCE_DATE,
+                    date_resolution.recommendation_date,
                 )
                 answer = recommendation.message
                 results = list(recommendation.events) or previous_results
-    elif event_recommendation.is_similar_query(prompt):
-        selected_event = st.session_state.get("selected_event")
-        if selected_event is None and len(previous_results) == 1:
-            selected_event = previous_results[0]
-        if selected_event is None:
-            answer = (
-                faq_match.answer
-                if _is_general_faq_context(prompt, faq_match)
-                else "まず基準にするイベントを1件選んでみて。"
-            )
+    elif route.action_type == "recommend_similar_without_selection":
+        answer = "まず基準にするイベントを1件選んでみて。"
+        results = previous_results
+    elif route.action_type == "recommend_similar":
+        selected_event = dict(route.selected_event) if route.selected_event is not None else None
+        source_events = event_search.load_events()
+        if selected_event is None or not event_details.V2_FIELDS.issubset(selected_event) or any(
+            not event_details.V2_FIELDS.issubset(event) for event in source_events
+        ):
+            answer = "類似イベントの推薦に必要な構造化データが、まだ読み込み中です。少し待ってからもう一度試してみて。"
             results = previous_results
         else:
-            source_events = event_search.load_events()
-            if not event_details.V2_FIELDS.issubset(selected_event) or any(
-                not event_details.V2_FIELDS.issubset(event) for event in source_events
-            ):
-                answer = "類似イベントの推薦に必要な構造化データが、まだ読み込み中です。少し待ってからもう一度試してみて。"
-                results = previous_results
-            else:
-                recommendation = event_recommendation.recommend_similar_events(
-                    selected_event,
-                    source_events,
-                    POC_REFERENCE_DATE,
-                    preferences=_recommendation_preferences(prompt),
-                )
-                answer = recommendation.message
-                results = list(recommendation.events) or previous_results
-    elif event_search.asks_for_nearby(prompt):
-        answer = faq_match.answer if _is_general_faq_context(prompt, faq_match) else NEARBY_MESSAGE
-    elif event_search.classify_intent(prompt) in {"injection", "out_of_scope"}:
+            recommendation = event_recommendation.recommend_similar_events(
+                selected_event,
+                source_events,
+                POC_REFERENCE_DATE,
+                preferences=_recommendation_preferences(prompt),
+            )
+            answer = recommendation.message
+            results = list(recommendation.events) or previous_results
+    elif route.action_type == "nearby":
+        answer = NEARBY_MESSAGE
+    elif route.action_type == "scope_search":
         search_result = _search_result(prompt)
         answer = search_result.message or GENERIC_SCOPE_MESSAGE
-    elif _is_general_faq_context(prompt, faq_match):
-        answer = faq_match.answer
+    elif route.action_type == "general_faq":
+        answer = route.faq_match.answer if route.faq_match is not None else GENERIC_SCOPE_MESSAGE
         results = previous_results
-    elif not event_search.looks_like_event_query(prompt):
+    elif route.action_type == "generic_scope":
         answer = GENERIC_SCOPE_MESSAGE
     else:
         inherit_previous = event_search.is_refinement_query(prompt) and bool(

@@ -16,6 +16,7 @@
       "日時",
       "start_datetime",
       "end_datetime",
+      "参加形式",
       "市町",
       "地域",
       "場所",
@@ -71,6 +72,12 @@
       "end_datetime": {
         "type": "string",
         "format": "date-time"
+      },
+      "参加形式": {
+        "enum": [
+          "開始時刻参加",
+          "随時入場"
+        ]
       },
       "市町": {
         "type": "string",

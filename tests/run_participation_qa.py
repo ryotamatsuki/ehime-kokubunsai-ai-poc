@@ -108,7 +108,7 @@ for query, faq_id in (
 # event-specific hand-written mapping.
 俳句 = event_by_id(events, "002")
 next_result = recommend_next_events(俳句, events, date(2028, 10, 22))
-check([event["id"] for event in next_result.events] == ["003"], "next-event ranking missed event 003")
+check([event["id"] for event in next_result.events] == ["003", "028"], "next-event ranking missed start/drop-in candidates")
 check("簡易移動バッファ" in next_result.message, "next-event explanation omitted its assumption")
 
 today_result = recommend_next_events(period, events, date(2028, 11, 3))

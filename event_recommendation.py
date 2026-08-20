@@ -8,6 +8,12 @@ import re
 from typing import Any, Mapping, Sequence
 
 from event_details import EventSchedule, normalize_schedule
+from event_search import parse_query
+
+
+START_TIME_ENTRY = "開始時刻参加"
+DROP_IN_ENTRY = "随時入場"
+DROP_IN_MIN_VISIT_MINUTES = 60
 
 
 @dataclass(frozen=True)
@@ -17,8 +23,79 @@ class RecommendationResult:
     message: str = ""
 
 
+@dataclass(frozen=True)
+class RecommendationDateResolution:
+    """The date selected for a next-event calculation, if it is known."""
+
+    recommendation_date: date | None
+    message: str = ""
+
+
+def _format_date_ja(value: date) -> str:
+    return f"{value.year}年{value.month}月{value.day}日"
+
+
+def _parsed_query_dates(query: str, reference_date: date) -> list[date]:
+    filters = parse_query(query, reference_date)
+    return [date.fromisoformat(value) for value in filters.dates]
+
+
+def _previous_filter_dates(previous_filters: Mapping[str, Any] | None) -> list[date]:
+    if not previous_filters:
+        return []
+    values = previous_filters.get("dates", [])
+    if not isinstance(values, (list, tuple)):
+        return []
+    result: list[date] = []
+    for value in values:
+        try:
+            result.append(date.fromisoformat(str(value)))
+        except ValueError:
+            continue
+    return result
+
+
+def resolve_recommendation_date(
+    selected_event: Mapping[str, Any],
+    query: str,
+    reference_date: date,
+    *,
+    previous_filters: Mapping[str, Any] | None = None,
+) -> RecommendationDateResolution:
+    """Resolve the day used by a next-event recommendation.
+
+    A single-day event supplies its own day.  A period event requires an
+    explicit day from the current query or the immediately preceding search;
+    the fixed PoC date is never used as a silent fallback for that case.
+    """
+
+    schedule = normalize_schedule(selected_event)
+    if schedule.start_date == schedule.end_date:
+        return RecommendationDateResolution(schedule.start_date)
+
+    query_dates = _parsed_query_dates(query, reference_date)
+    if not query_dates:
+        query_dates = _previous_filter_dates(previous_filters)
+    if len(query_dates) != 1:
+        return RecommendationDateResolution(
+            None,
+            "期間開催のイベントなので、何日に行く予定か教えてみて。",
+        )
+
+    requested_date = query_dates[0]
+    if not schedule.active_on(requested_date):
+        return RecommendationDateResolution(
+            None,
+            f"{_format_date_ja(requested_date)}は選択中のイベントの開催期間外です。その日の次の候補は計算しません。",
+        )
+    return RecommendationDateResolution(requested_date)
+
+
 def is_next_query(query: str) -> bool:
-    return any(term in query for term in ("このあと", "この後", "次に", "もう一つ", "行けそう"))
+    return any(
+        term in query
+        for term in ("このあと", "この後", "そのあと", "その後", "次に", "もう一つ", "行けそう")
+    )
 
 
 def is_similar_query(query: str) -> bool:
@@ -108,7 +185,9 @@ def recommend_next_events(
 
     selected_schedule = normalize_schedule(selected_event)
     if not selected_schedule.active_on(reference_date):
-        return RecommendationResult(message="選択中のイベントはPoC上の今日には開催されないため、このあとの候補は計算できません。")
+        return RecommendationResult(
+            message=f"{_format_date_ja(reference_date)}は選択中のイベントの開催期間外なので、このあとの候補は計算できません。"
+        )
     selected_end = selected_schedule.ends_at(reference_date)
     ranked: list[tuple[int, int, dict[str, Any], tuple[str, ...]]] = []
     for index, event in enumerate(events):
@@ -119,10 +198,17 @@ def recommend_next_events(
             continue
         if _region(selected_event) != _region(event):
             continue
-        candidate_start = schedule.starts_at(reference_date)
         same_city = _city(selected_event) == _city(event)
         buffer = timedelta(minutes=30 if same_city else 60)
-        if candidate_start < selected_end + buffer:
+        arrival_time = selected_end + buffer
+        candidate_start = schedule.starts_at(reference_date)
+        candidate_end = schedule.ends_at(reference_date)
+        if str(event.get("参加形式", START_TIME_ENTRY)) == DROP_IN_ENTRY:
+            visit_start = max(arrival_time, candidate_start)
+            minimum_visit_end = visit_start + timedelta(minutes=DROP_IN_MIN_VISIT_MINUTES)
+            if candidate_end < minimum_visit_end:
+                continue
+        elif candidate_start < arrival_time:
             continue
         score, reasons = _preference_score(selected_event, event, None)
         score += 30 if same_city else 10
