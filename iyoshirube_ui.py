@@ -15,6 +15,8 @@ from typing import Any
 IYOSHIRUBE_NAME = "いよしるべ"
 IYOSHIRUBE_TAGLINE = "愛媛の文化、いっしょに探してみん？"
 IYOSHIRUBE_ASSET_DIR = Path(__file__).resolve().parent / "assets" / "iyoshirube"
+IYOSHIRUBE_UI_ASSET_DIR = IYOSHIRUBE_ASSET_DIR.parent / "ui"
+IYOSHIRUBE_WAVE_ASSET = IYOSHIRUBE_UI_ASSET_DIR / "seigaiha_wave.png"
 
 EMOTION_NORMAL = "normal"
 EMOTION_HAPPY = "happy"

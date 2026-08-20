@@ -6,6 +6,7 @@ from iyoshirube_ui import (
     EMOTION_THINKING,
     EMOTION_TROUBLED,
     IYOSHIRUBE_AVATARS,
+    IYOSHIRUBE_WAVE_ASSET,
     avatar_path,
     emotion_from_message,
     model_history,
@@ -197,3 +198,8 @@ def test_all_avatar_assets_are_local_rgba_pngs() -> None:
     for path in IYOSHIRUBE_AVATARS.values():
         assert avatar_path(path.stem) == path
         assert path.read_bytes().startswith(png_signature)
+
+
+def test_wave_decoration_is_a_local_png_asset() -> None:
+    assert IYOSHIRUBE_WAVE_ASSET.is_file()
+    assert IYOSHIRUBE_WAVE_ASSET.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")

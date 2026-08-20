@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import date
 from collections.abc import Mapping
+from html import escape
 import importlib
 import inspect
 import re
@@ -47,6 +48,7 @@ from iyoshirube_ui import (
     EMOTION_THINKING,
     IYOSHIRUBE_NAME,
     IYOSHIRUBE_TAGLINE,
+    IYOSHIRUBE_WAVE_ASSET,
     avatar_path,
     avatar_for_streamlit,
     emotion_from_message,
@@ -222,6 +224,100 @@ _EXPECTED_MODAL_HOST_RE = re.compile(
 
 
 st.set_page_config(page_title=PAGE_TITLE, page_icon="🎭", layout="wide")
+
+
+def _inject_ui_css() -> None:
+    """Make the standard Streamlit layout follow the supplied UI reference."""
+
+    st.markdown(
+        """
+        <style>
+        :root {
+            --iyoshirube-navy: #1f3c72;
+            --iyoshirube-blue: #315a97;
+            --iyoshirube-border: #d7dce5;
+            --iyoshirube-soft: #f6f8fc;
+        }
+        [data-testid="stAppViewContainer"] { background: #ffffff; }
+        [data-testid="stMainBlockContainer"] {
+            max-width: 1180px;
+            padding-top: 1.35rem;
+            padding-bottom: 5.5rem;
+        }
+        [data-testid="stSidebar"] > div:first-child {
+            background: var(--iyoshirube-soft);
+            border-right: 1px solid #e2e6ee;
+        }
+        .st-key-iyoshirube-sidebar {
+            padding: 0.25rem 0.15rem 1rem;
+        }
+        .st-key-iyoshirube-hero {
+            overflow: hidden;
+        }
+        .st-key-iyoshirube-wave img {
+            max-width: 100%;
+            height: auto;
+            opacity: 0.72;
+        }
+        .st-key-iyoshirube-sidebar button {
+            min-height: 2.75rem;
+            margin: 0.18rem 0;
+            border: 1px solid var(--iyoshirube-border);
+            border-radius: 0.75rem;
+            background: #ffffff;
+            color: #263650;
+            text-align: left;
+            box-shadow: 0 1px 2px rgba(31, 60, 114, 0.04);
+        }
+        .st-key-iyoshirube-sidebar button:hover {
+            border-color: #9bb1d4;
+            color: var(--iyoshirube-navy);
+        }
+        [data-testid="stChatMessage"] { padding: 0.28rem 0.45rem; }
+        [data-testid="stChatMessage"] [data-testid="stMarkdownContainer"] {
+            line-height: 1.55;
+        }
+        [data-testid="stVerticalBlockBorderWrapper"] {
+            border-color: var(--iyoshirube-border);
+            border-radius: 0.8rem;
+        }
+        .iyoshirube-event-fact {
+            display: flex;
+            gap: 0.38rem;
+            align-items: flex-start;
+            margin: 0.13rem 0;
+            color: #334155;
+            font-size: 0.86rem;
+            line-height: 1.42;
+        }
+        .iyoshirube-event-fact-icon {
+            min-width: 1.1rem;
+            color: var(--iyoshirube-blue);
+            font-weight: 700;
+            text-align: center;
+        }
+        .iyoshirube-event-overview {
+            margin-top: 0.32rem;
+            padding-top: 0.32rem;
+            border-top: 1px solid #edf0f5;
+            color: #526174;
+            font-size: 0.78rem;
+            line-height: 1.45;
+        }
+        @media (max-width: 700px) {
+            [data-testid="stMainBlockContainer"] {
+                padding-top: 0.8rem;
+                padding-bottom: 4.5rem;
+            }
+            .st-key-iyoshirube-sidebar button { min-height: 2.6rem; }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+_inject_ui_css()
 
 
 def _required_secret(name: str) -> str:
@@ -1596,23 +1692,42 @@ def _redact_event_facts(
 
 
 def _render_event_card(event: dict[str, object], index: int) -> None:
-    with st.container(border=True):
+    def fact(icon: str, label: str, value: object) -> None:
+        st.markdown(
+            "<div class=\"iyoshirube-event-fact\">"
+            f"<span class=\"iyoshirube-event-fact-icon\">{escape(icon)}</span>"
+            f"<span><strong>{escape(label)}</strong> {escape(str(value))}</span>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+
+    with st.container(border=True, key=f"iyoshirube-event-card-{index}"):
         st.markdown(f"**{index}. {event['イベント名']}**")
-        st.write(f"日時：{event['日時']}")
-        st.write(f"場所：{event['場所']}")
-        st.write(f"ジャンル：{event['ジャンル']}")
+        fact("◷", "日時", event["日時"])
+        fact("⌖", "場所", event["場所"])
+        fact("✦", "ジャンル", event["ジャンル"])
         # ``False`` means only that the source record is not marked
         # child-friendly; it does not establish an adult/general audience.
         audience = "子ども向け" if event.get("子ども向け") is True else "子ども向けの明示なし"
-        st.write(f"対象：{audience}")
-        st.write(f"会場：{event['屋内/屋外']}")
-        st.write(f"料金：{event['料金']}")
-        st.caption(str(event["概要"]))
+        fact("♧", "対象", audience)
+        fact("⌂", "会場", event["屋内/屋外"])
+        fact("¥", "料金", event["料金"])
+        st.markdown(
+            "<div class=\"iyoshirube-event-overview\">"
+            f"<strong>▣ 概要</strong> {escape(str(event['概要']))}"
+            "</div>",
+            unsafe_allow_html=True,
+        )
         if event_details.V2_FIELDS.issubset(event):
-            with st.expander("参加案内・アクセスを見る"):
+            with st.expander("♧ 参加案内・アクセスを見る"):
                 for line in event_details.compact_participation_lines(event):
                     st.write(line)
-        st.link_button("公式URL（PoC架空）", str(event["公式URL"]))
+        st.link_button(
+            "公式URL（PoC架空）",
+            str(event["公式URL"]),
+            icon=":material/open_in_new:",
+            use_container_width=True,
+        )
 
 
 def _render_event_grid(
@@ -1742,7 +1857,7 @@ modal_secret = _required_secret("MODAL_SECRET")
 
 title_col, mascot_col = st.columns([6, 1])
 with title_col:
-    st.title(PAGE_TITLE)
+    st.title("🎭  伊予の文化案内人")
     st.caption("愛顔えひめの文化祭2028を想定したイベント案内PoC")
 with mascot_col:
     _render_avatar_image(EMOTION_NORMAL, width=88)
@@ -1750,16 +1865,16 @@ with mascot_col:
 warning_col, date_col = st.columns([1.1, 1])
 with warning_col:
     st.warning(
-        "このサイトは生成AIを利用した技術検証用PoCです。\n\n"
-        "掲載イベントはすべて架空です。\n\n"
-        "愛媛県・愛顔えひめの文化祭2028の公式サービスではありません。\n\n"
-        "AIの回答には誤りが含まれる場合があります。"
+        "- 生成AIを利用した技術検証PoC\n"
+        "- 掲載イベントはすべて架空\n"
+        "- 愛媛県・愛顔えひめの文化祭2028の公式サービスではありません\n"
+        "- AI回答に誤りが含まれる場合があります"
     )
 with date_col:
-    st.info(f"PoC上の現在日：{POC_REFERENCE_DATE_TEXT}")
+    st.info(f"**PoC現在日**\n\n### {POC_REFERENCE_DATE_TEXT}")
 
-with st.container(border=True):
-    hero_avatar_col, hero_text_col = st.columns([1, 7])
+with st.container(border=True, key="iyoshirube-hero"):
+    hero_avatar_col, hero_text_col, hero_wave_col = st.columns([1.15, 5.25, 2.6])
     with hero_avatar_col:
         _render_avatar_image(EMOTION_NORMAL, width=128)
     with hero_text_col:
@@ -1768,6 +1883,10 @@ with st.container(border=True):
         st.caption(
             "愛顔えひめの文化祭2028を想定したPoC用の架空キャラクターです。"
         )
+    with hero_wave_col:
+        with st.container(key="iyoshirube-wave"):
+            if IYOSHIRUBE_WAVE_ASSET.is_file():
+                st.image(str(IYOSHIRUBE_WAVE_ASSET), use_container_width=True)
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -1787,19 +1906,38 @@ if "last_pair_results" not in st.session_state:
     st.session_state.last_pair_results = []
 
 with st.sidebar:
-    st.header("質問の例")
-    for action in QUICK_ACTIONS:
-        if st.button(action.label, key=f"quick_{action.label}"):
-            st.session_state.pending_prompt = action.fallback_query
-            st.session_state.pending_command = {
-                "kind": "quick_action",
-                "command": action.command.to_dict(),
-            }
-            st.rerun()
-    st.divider()
-    if st.button("会話をリセット", key="reset_conversation"):
-        _reset()
-    st.caption("個人情報・機密情報・未公開情報は入力しないでください。")
+    with st.container(key="iyoshirube-sidebar"):
+        st.markdown("### :material/list: 質問の例")
+        quick_action_icons = {
+            "今日のイベント": ":material/calendar_month:",
+            "子どもと楽しむ": ":material/groups:",
+            "雨でもOK": ":material/umbrella:",
+            "無料イベント": ":material/local_activity:",
+            "伝統芸能": ":material/celebration:",
+            "南予のイベント": ":material/location_on:",
+        }
+        for action in QUICK_ACTIONS:
+            if st.button(
+                action.label,
+                icon=quick_action_icons[action.label],
+                use_container_width=True,
+                key=f"quick_{action.label}",
+            ):
+                st.session_state.pending_prompt = action.fallback_query
+                st.session_state.pending_command = {
+                    "kind": "quick_action",
+                    "command": action.command.to_dict(),
+                }
+                st.rerun()
+        st.divider()
+        if st.button(
+            "会話をリセット",
+            icon=":material/refresh:",
+            use_container_width=True,
+            key="reset_conversation",
+        ):
+            _reset()
+        st.caption("⚠ 個人情報・機密情報・未公開情報は入力しないでください。")
 
 _render_assistant_message(
     "こんにちは、いよしるべです。\n\n"
@@ -1831,13 +1969,22 @@ if st.session_state.last_near_results:
 
 if st.session_state.get("last_query"):
     st.divider()
-    st.caption("この案内は役に立ちましたか？")
-    feedback_col1, feedback_col2 = st.columns(2)
+    feedback_label_col, feedback_col1, feedback_col2 = st.columns([2.8, 1, 1])
+    with feedback_label_col:
+        st.caption("この案内は役に立ちましたか？")
     with feedback_col1:
-        if st.button("役に立った", key="feedback_yes"):
+        if st.button(
+            "役に立った",
+            icon=":material/thumb_up:",
+            key="feedback_yes",
+        ):
             st.session_state.feedback = "yes"
     with feedback_col2:
-        if st.button("改善が必要", key="feedback_no"):
+        if st.button(
+            "改善が必要",
+            icon=":material/thumb_down:",
+            key="feedback_no",
+        ):
             st.session_state.feedback = "no"
     if st.session_state.get("feedback") == "yes":
         st.success("フィードバックを受け取りました。")
