@@ -332,13 +332,26 @@ def _clean_soft_terms(values: list[str], query: str) -> list[str]:
         "料金がかからない", "幼稚園児", "未就学児", "保育園児", "幼児", "小さい子",
         "小学生", "中学生", "高校生", "大人", "成人",
     )
+    grammar_terms = (
+        "イベント", "楽しめる", "楽しみたい", "行ける", "行きたい", "参加できる",
+        "参加したい", "参加", "できる", "できそう", "大丈夫", "やっている", "やって",
+        "やる", "向け", "ある", "ありますか", "おすすめ", "探して", "探す",
+        "どれくらい", "どのくらい", "どの程度", "何件", "いくつ", "件数", "何個",
+    )
     terms: list[str] = []
     for value in values:
         cleaned = re.sub(r"(?<!\d)\d{1,2}(?:歳|才)", "", value).strip()
         for control in semantic_controls:
             cleaned = cleaned.replace(control, " ")
         cleaned = re.sub(r"(?:が)?好き|(?:に)?興味(?:がある)?", "", cleaned).strip()
-        cleaned = re.sub(r"イベント|楽しめる|楽しみたい|行ける|行きたい", "", cleaned).strip()
+        for grammar in grammar_terms:
+            cleaned = cleaned.replace(grammar, " ")
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        # Removing a semantic phrase can leave attached Japanese particles
+        # such as 「で」 in 「建物の中でやる」.  Those are grammar, not search
+        # content and must not become an exact soft-term predicate.
+        cleaned = re.sub(r"^[のはがをにでとやへもか]+", "", cleaned)
+        cleaned = re.sub(r"[のはがをにでとやへもか]+$", "", cleaned).strip()
         if cleaned and cleaned not in generic and len(cleaned) >= 2 and cleaned not in terms:
             terms.append(cleaned)
     # Age-only and semantic-constraint discovery have no soft term; do not
