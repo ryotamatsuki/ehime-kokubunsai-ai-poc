@@ -296,6 +296,8 @@ def _fee_answer(event: Mapping[str, Any], query: str) -> str:
 
 def answer_event_detail(event: Mapping[str, Any], field: str, query: str = "") -> str:
     name = str(event["イベント名"])
+    if not V2_FIELDS.issubset(event):
+        return f"「{name}」の参加案内の詳細は、現在のデータに登録されていません。"
     guide = event["参加案内"]
     access = event["アクセス"]
     rain = event["雨天時対応"]
