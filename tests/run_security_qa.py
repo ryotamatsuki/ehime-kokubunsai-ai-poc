@@ -55,4 +55,17 @@ check("safe_fields" in llm_text and '"料金"' in llm_text, "Modal candidate whi
 check("参加案内" not in llm_text and "アクセス" not in llm_text and "問い合わせ" not in llm_text, "nested facts leaked to Modal")
 check('"公式URL"' not in llm_text, "event URL leaked to Modal candidate payload")
 
+# Agentic Search is bounded by typed JSON and a static dispatcher.  It must
+# never turn planner output into executable Python.
+for filename in ("agent_models.py", "agent_planner.py", "agent_tools.py", "agent_orchestrator.py"):
+    source = (ROOT / filename).read_text(encoding="utf-8")
+    check("eval(" not in source and "exec(" not in source and "globals()[" not in source, f"dynamic execution leaked into {filename}")
+agent_tools_source = (ROOT / "agent_tools.py").read_text(encoding="utf-8")
+check('"search_events"' in agent_tools_source and '"count_events"' in agent_tools_source, "allow-listed tools are missing")
+check("def execute_tool" in agent_tools_source, "static tool dispatcher is missing")
+planner_source = (ROOT / "agent_planner.py").read_text(encoding="utf-8")
+check("validate_search_plan" in planner_source and "validate_writer_output" in planner_source, "agentic validation boundary is missing")
+backend_source = (ROOT / "modal_backend.py").read_text(encoding="utf-8")
+check('mode"' in backend_source and "_make_planner_messages" in backend_source and "_make_writer_messages" in backend_source, "planner/writer Modal modes are missing")
+
 print("Security / Injection QA: PASS")

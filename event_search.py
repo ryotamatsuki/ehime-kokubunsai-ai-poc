@@ -821,6 +821,10 @@ def looks_like_event_query(query: str) -> bool:
     intent = classify_intent(query)
     if intent in {"injection", "out_of_scope", "needs_location", "needs_region"}:
         return False
+    # Age-oriented discovery is intentionally left for the bounded Agentic
+    # Search planner when the legacy parser has no dedicated age field yet.
+    if re.search(r"\d{1,2}歳", normalize_query(query)):
+        return True
     filters = parse_query(query)
     return bool(filters.dates or filters.city_groups or filters.region_groups or filters.genre_groups or filters.child_friendly or filters.venue or filters.rain_preferred or filters.entry_free or filters.paid_only or filters.max_entry_fee is not None or filters.time_slots or filters.time_after is not None or filters.soft_terms or filters.requested_field or intent in {"count", "refine", "attribute"})
 
