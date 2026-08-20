@@ -23,6 +23,7 @@ V2_FIELDS = frozenset(
         "search_tags",
         "start_datetime",
         "end_datetime",
+        "参加形式",
         "市町",
         "地域",
         "料金構造",
@@ -137,6 +138,8 @@ def validate_event_v2(event: Mapping[str, Any], index: int = 1) -> None:
         isinstance(value, str) and value.strip() for value in event["search_tags"]
     ):
         raise ValueError(f"events.json {index}件目のsearch_tagsが不正です")
+    if event["参加形式"] not in {"開始時刻参加", "随時入場"}:
+        raise ValueError(f"events.json {index}件目の参加形式が不正です")
     if not isinstance(event["子ども向け"], bool):
         raise ValueError(f"events.json {index}件目の子ども向けが不正です")
     if event["地域"] not in REGION_CITIES:
