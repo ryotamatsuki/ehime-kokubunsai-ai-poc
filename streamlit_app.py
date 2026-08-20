@@ -42,6 +42,17 @@ from command_models import (
     MAX_VISIT_COUNT,
 )
 from flow_registry import FLOW_REGISTRY
+from iyoshirube_ui import (
+    EMOTION_NORMAL,
+    EMOTION_THINKING,
+    IYOSHIRUBE_NAME,
+    IYOSHIRUBE_TAGLINE,
+    avatar_path,
+    avatar_for_streamlit,
+    emotion_from_message,
+    model_history,
+    select_assistant_emotion,
+)
 
 
 PAGE_TITLE = "🎭 伊予の文化案内人"
@@ -210,7 +221,7 @@ _EXPECTED_MODAL_HOST_RE = re.compile(
 )
 
 
-st.set_page_config(page_title=PAGE_TITLE, page_icon="🎭", layout="centered")
+st.set_page_config(page_title=PAGE_TITLE, page_icon="🎭", layout="wide")
 
 
 def _required_secret(name: str) -> str:
@@ -1379,7 +1390,9 @@ def _call_modal(
     payload = {
         "user_query": user_query,
         "candidates": _llm_candidates(candidates),
-        "history": history[-8:],
+        # ``emotion`` is presentation metadata and must not enter the
+        # existing LLM history contract.
+        "history": model_history(history),
     }
     try:
         response = requests.post(
@@ -1602,6 +1615,50 @@ def _render_event_card(event: dict[str, object], index: int) -> None:
         st.link_button("公式URL（PoC架空）", str(event["公式URL"]))
 
 
+def _render_event_grid(
+    events: list[dict[str, object]],
+    *,
+    start_index: int = 1,
+) -> None:
+    """Render grounded event cards in a responsive, at-most-three-column grid."""
+
+    for row_start in range(0, len(events), 3):
+        row_events = events[row_start : row_start + 3]
+        columns = st.columns(3 if len(row_events) == 3 else len(row_events))
+        for column, event_offset in zip(columns, range(len(row_events))):
+            with column:
+                _render_event_card(
+                    row_events[event_offset],
+                    start_index + row_start + event_offset,
+                )
+
+
+def _render_avatar_image(emotion: str, *, width: int) -> None:
+    """Render a local avatar asset while keeping missing-asset fallback safe."""
+
+    path = avatar_path(emotion)
+    if path is not None:
+        st.image(str(path), width=width)
+    else:
+        st.markdown("🧭")
+
+
+def _render_assistant_message(content: str, emotion: object) -> None:
+    """Render one persisted or temporary assistant turn with its avatar."""
+
+    with st.chat_message(
+        "assistant",
+        avatar=avatar_for_streamlit(emotion),
+    ):
+        st.caption(IYOSHIRUBE_NAME)
+        st.markdown(content)
+
+
+def _render_user_message(content: str) -> None:
+    with st.chat_message("user"):
+        st.markdown(content)
+
+
 def _render_pair_results(
     pairs: list[tuple[dict[str, Any], dict[str, Any]]],
 ) -> None:
@@ -1683,15 +1740,34 @@ modal_url = _validate_modal_url(_required_secret("MODAL_URL"))
 modal_key = _required_secret("MODAL_KEY")
 modal_secret = _required_secret("MODAL_SECRET")
 
-st.title(PAGE_TITLE)
-st.caption("愛顔えひめの文化祭2028を想定したイベント案内PoC")
-st.warning(
-    "このサイトは生成AIを利用した技術検証用PoCです。\n\n"
-    "掲載イベントはすべて架空です。\n\n"
-    "愛媛県・愛顔えひめの文化祭2028の公式サービスではありません。\n\n"
-    "AIの回答には誤りが含まれる場合があります。"
-)
-st.info(f"PoC上の現在日：{POC_REFERENCE_DATE_TEXT}")
+title_col, mascot_col = st.columns([6, 1])
+with title_col:
+    st.title(PAGE_TITLE)
+    st.caption("愛顔えひめの文化祭2028を想定したイベント案内PoC")
+with mascot_col:
+    _render_avatar_image(EMOTION_NORMAL, width=88)
+
+warning_col, date_col = st.columns([1.1, 1])
+with warning_col:
+    st.warning(
+        "このサイトは生成AIを利用した技術検証用PoCです。\n\n"
+        "掲載イベントはすべて架空です。\n\n"
+        "愛媛県・愛顔えひめの文化祭2028の公式サービスではありません。\n\n"
+        "AIの回答には誤りが含まれる場合があります。"
+    )
+with date_col:
+    st.info(f"PoC上の現在日：{POC_REFERENCE_DATE_TEXT}")
+
+with st.container(border=True):
+    hero_avatar_col, hero_text_col = st.columns([1, 7])
+    with hero_avatar_col:
+        _render_avatar_image(EMOTION_NORMAL, width=128)
+    with hero_text_col:
+        st.subheader(IYOSHIRUBE_NAME)
+        st.write(IYOSHIRUBE_TAGLINE)
+        st.caption(
+            "愛顔えひめの文化祭2028を想定したPoC用の架空キャラクターです。"
+        )
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -1725,24 +1801,48 @@ with st.sidebar:
         _reset()
     st.caption("個人情報・機密情報・未公開情報は入力しないでください。")
 
+_render_assistant_message(
+    "こんにちは、いよしるべです。\n\n"
+    "愛媛の文化イベントをいっしょに探してみん？",
+    EMOTION_NORMAL,
+)
+
 for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
+    if message.get("role") == "assistant":
+        _render_assistant_message(
+            str(message.get("content", "")),
+            emotion_from_message(message),
+        )
+    else:
+        _render_user_message(str(message.get("content", "")))
 
 if st.session_state.last_pair_results:
     _render_pair_results(st.session_state.last_pair_results)
 
 if st.session_state.last_results and not st.session_state.last_pair_results:
     st.subheader("条件に合うイベント")
-    for index, event in enumerate(st.session_state.last_results, start=1):
-        _render_event_card(event, index)
+    _render_event_grid(st.session_state.last_results)
 
 if st.session_state.last_near_results:
     relaxed = st.session_state.last_relaxed_condition or "一部の条件"
     st.subheader(f"参考候補（「{relaxed}」を外した場合）")
     st.caption("上の検索結果には含めていません。条件を緩めた候補として表示しています。")
-    for index, event in enumerate(st.session_state.last_near_results, start=1):
-        _render_event_card(event, index)
+    _render_event_grid(st.session_state.last_near_results)
+
+if st.session_state.get("last_query"):
+    st.divider()
+    st.caption("この案内は役に立ちましたか？")
+    feedback_col1, feedback_col2 = st.columns(2)
+    with feedback_col1:
+        if st.button("役に立った", key="feedback_yes"):
+            st.session_state.feedback = "yes"
+    with feedback_col2:
+        if st.button("改善が必要", key="feedback_no"):
+            st.session_state.feedback = "no"
+    if st.session_state.get("feedback") == "yes":
+        st.success("フィードバックを受け取りました。")
+    elif st.session_state.get("feedback") == "no":
+        st.info("ありがとうございます。PoCの改善に使います。")
 
 prompt = st.session_state.pop("pending_prompt", None)
 if prompt is None:
@@ -1769,12 +1869,27 @@ if prompt:
 
     history = list(st.session_state.messages)
     st.session_state.messages.append({"role": "user", "content": prompt})
+    # Render only this new turn while the synchronous backend work is running.
+    # The temporary nodes are not added to session_state and disappear on the
+    # final rerun, so the persisted history cannot be duplicated.
+    _render_user_message(prompt)
+    thinking_placeholder = st.empty()
+    with thinking_placeholder.container():
+        _render_assistant_message("いよしるべが考え中…", EMOTION_THINKING)
+
     results: list[dict[str, object]] = []
     near_results: list[dict[str, object]] = []
     relaxed_condition: str | None = None
     selected_event: dict[str, object] | None = None
     filters: event_search.SearchFilters | None = None
     search_result: event_search.SearchResult | None = None
+    exact_result_count: int | None = None
+    recommendation_result_count: int | None = None
+    pair_result_count: int | None = None
+    invalid_input = False
+    event_selection_failed = False
+    backend_failure = False
+    command_preparation_failed = False
     previous_results = list(st.session_state.get("last_results", []))
     route = route_conversation(
         prompt,
@@ -1798,6 +1913,11 @@ if prompt:
         if pending_decision.handled:
             pending_handled = True
             pending_state_to_store = pending_decision.next_state
+            if pending_decision.answer and any(
+                marker in pending_decision.answer
+                for marker in ("解釈できませんでした", "開催時間内で", "開催期間外")
+            ):
+                invalid_input = True
         else:
             # A non-date/time turn is a new question.  Do not force it through
             # the pending flow; the normal router handles named events, FAQs,
@@ -1843,6 +1963,7 @@ if prompt:
                     pending_command = pending_time.command
                     invalid_answer = "時刻を解釈できませんでした。例：13時、13:30"
                 if invalid_pending or pending_command is None:
+                    invalid_input = invalid_pending
                     command_pending_to_store = active_command_pending
                     command_handled = True
                     command_render = _CommandRender(
@@ -1916,6 +2037,16 @@ if prompt:
                 detail_field=detail_field,
             )
             command_pending_to_store = command_render.pending_state
+            if command_outcome.flow == "find_events":
+                exact_result_count = len(command_outcome.events)
+            if command_outcome.flow in {"recommend_next", "recommend_similar"}:
+                recommendation_result_count = len(command_outcome.events)
+            if command_outcome.flow in {
+                "plan_event_pair",
+                "event_pair",
+                "pair_recommendation",
+            }:
+                pair_result_count = len(command_outcome.pairs)
 
     agentic_response = None
     parsed_for_agentic = event_search.parse_query(prompt, POC_REFERENCE_DATE)
@@ -1945,6 +2076,7 @@ if prompt:
         )
         answer = agent_orchestrator.render_agentic_response(agentic_response)
         results = list(agentic_response.exact_events)
+        exact_result_count = len(agentic_response.exact_events)
         near_results = list(agentic_response.relaxed_events)
         relaxed_condition = "・".join(
             agent_orchestrator.humanize_relaxed_fields(agentic_response.relaxed_fields)
@@ -1985,8 +2117,10 @@ if prompt:
             )
             if recommendation_error is not None or recommendation is None:
                 answer = recommendation_error or BACKEND_FAILURE_MESSAGE
+                recommendation_result_count = 0
             else:
                 answer = recommendation.message
+                recommendation_result_count = len(recommendation.events)
                 results = list(recommendation.events) or previous_results
         else:
             answer = "推薦条件を確認できませんでした。イベント名からもう一度探してみて。"
@@ -2023,6 +2157,7 @@ if prompt:
         selected_event = dict(route.selected_event) if route.selected_event is not None else None
         if selected_event is None:
             answer = "次のイベント推薦に必要なイベントを特定できませんでした。イベント名を教えてみて。"
+            event_selection_failed = True
             results = previous_results
         else:
             date_resolution = event_recommendation.resolve_recommendation_date(
@@ -2034,6 +2169,9 @@ if prompt:
             if date_resolution.recommendation_date is None:
                 answer = date_resolution.message
                 results = previous_results
+                invalid_input = invalid_input or (
+                    "開催期間外" in date_resolution.message
+                )
                 if date_resolution.message.startswith("期間開催のイベントなので"):
                     pending_state_to_store = recommendation_pending.make_pending_state(
                         selected_event,
@@ -2054,9 +2192,11 @@ if prompt:
                 )
                 if recommendation_error is not None or recommendation is None:
                     answer = recommendation_error or BACKEND_FAILURE_MESSAGE
+                    recommendation_result_count = 0
                     results = previous_results
                 else:
                     answer = recommendation.message
+                    recommendation_result_count = len(recommendation.events)
                     results = list(recommendation.events) or previous_results
     elif route.action_type == "recommend_similar_without_selection":
         answer = "まず基準にするイベントを1件選んでみて。"
@@ -2068,6 +2208,9 @@ if prompt:
             not event_details.V2_FIELDS.issubset(event) for event in source_events
         ):
             answer = "類似イベントの推薦に必要な構造化データが、まだ読み込み中です。少し待ってからもう一度試してみて。"
+            recommendation_result_count = 0
+            if selected_event is None:
+                event_selection_failed = True
             results = previous_results
         else:
             recommendation = event_recommendation.recommend_similar_events(
@@ -2077,11 +2220,13 @@ if prompt:
                 preferences=_recommendation_preferences(prompt),
             )
             answer = recommendation.message
+            recommendation_result_count = len(recommendation.events)
             results = list(recommendation.events) or previous_results
     elif route.action_type == "nearby":
         answer = NEARBY_MESSAGE
     elif route.action_type == "scope_search":
         search_result = _search_result(prompt)
+        exact_result_count = len(search_result.events)
         answer = search_result.message or GENERIC_SCOPE_MESSAGE
     elif route.action_type == "general_faq":
         answer = route.faq_match.answer if route.faq_match is not None else GENERIC_SCOPE_MESSAGE
@@ -2098,6 +2243,8 @@ if prompt:
             inherit_previous=inherit_previous,
         )
         filters = search_result.filters
+        invalid_input = invalid_input or bool(filters.invalid_date)
+        exact_result_count = len(search_result.events)
         results = list(search_result.events[:MAX_EVENT_CANDIDATES])
         near_results = list(search_result.near_matches[:MAX_EVENT_CANDIDATES])
         relaxed_condition = search_result.relaxed_condition
@@ -2120,7 +2267,82 @@ if prompt:
                 candidates=results,
                 history=history,
             )
-    st.session_state.messages.append({"role": "assistant", "content": answer})
+    if command_handled:
+        turn_flow = (
+            command_outcome.flow
+            if command_outcome is not None
+            else str((active_command_pending or {}).get("flow") or "command")
+        )
+        command_preparation_failed = command_preparation_failed or (
+            command_outcome is None
+            and command_render is not None
+            and command_render.pending_state is None
+        )
+        if command_render is not None and command_render.pair_results:
+            pair_result_count = len(command_render.pair_results)
+        if (
+            command_outcome is not None
+            and command_outcome.flow == "event_detail"
+            and command_render is not None
+            and command_render.selected_event is None
+        ):
+            event_selection_failed = True
+    elif pending_handled:
+        # The pending recommendation is still a recommend_next flow even
+        # when the current query is only a date/time reply.
+        turn_flow = "recommend_next"
+    elif agentic_response is not None:
+        turn_flow = "agentic_search"
+    else:
+        turn_flow = route.action_type
+        if route.action_type == "search" and filters is not None:
+            if filters.intent == "count":
+                turn_flow = "count_events"
+            elif detail_field or filters.requested_field:
+                # The legacy search branch can answer a factual field without
+                # taking the router's dedicated detail-followup path.
+                turn_flow = "event_detail"
+
+    if turn_flow in {"reference_followup", "event_detail", "detail_followup"}:
+        event_selection_failed = event_selection_failed or (
+            selected_event is None
+            and any(
+                marker in answer
+                for marker in ("どのイベント", "番号かイベント名")
+            )
+        )
+    backend_failure = backend_failure or answer == BACKEND_FAILURE_MESSAGE
+    pending_for_emotion = bool(
+        (command_render is not None and command_render.pending_state is not None)
+        or pending_state_to_store is not None
+        or turn_flow
+        in {
+            "recommend_next_without_selection",
+            "recommend_similar_without_selection",
+        }
+    )
+    assistant_emotion = select_assistant_emotion(
+        answer=answer,
+        result_count=len(results),
+        exact_result_count=exact_result_count,
+        flow=turn_flow,
+        route_action=route.action_type,
+        pair_result_count=pair_result_count,
+        recommendation_result_count=recommendation_result_count,
+        pending=pending_for_emotion,
+        backend_failure=backend_failure,
+        command_preparation_failed=command_preparation_failed,
+        invalid_input=invalid_input,
+        event_selection_failed=event_selection_failed,
+    )
+    thinking_placeholder.empty()
+    st.session_state.messages.append(
+        {
+            "role": "assistant",
+            "content": answer,
+            "emotion": assistant_emotion,
+        }
+    )
     st.session_state.last_results = results
     st.session_state.last_near_results = near_results
     st.session_state.last_relaxed_condition = relaxed_condition
@@ -2203,18 +2425,3 @@ if prompt:
     st.session_state.last_query = prompt
     st.session_state.feedback = None
     st.rerun()
-
-if st.session_state.get("last_query"):
-    st.divider()
-    st.caption("この案内は役に立ちましたか？")
-    feedback_col1, feedback_col2 = st.columns(2)
-    with feedback_col1:
-        if st.button("役に立った", key="feedback_yes"):
-            st.session_state.feedback = "yes"
-    with feedback_col2:
-        if st.button("改善が必要", key="feedback_no"):
-            st.session_state.feedback = "no"
-    if st.session_state.get("feedback") == "yes":
-        st.success("フィードバックを受け取りました。")
-    elif st.session_state.get("feedback") == "no":
-        st.info("ありがとうございます。PoCの改善に使います。")
