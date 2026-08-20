@@ -180,6 +180,8 @@ def _call_modal(
         answer = result.get("answer")
         if not isinstance(answer, str) or not answer.strip():
             return BACKEND_FAILURE_MESSAGE
+        if _has_unapproved_event_claims(answer, candidates):
+            return _fallback_guidance(candidates)
         return _redact_event_facts(answer, candidates)
     except (requests.RequestException, ValueError, TypeError):
         # Do not display exception text: it can contain URLs, headers, or
@@ -232,6 +234,90 @@ def _event_fact_redactions(
                 )
 
     return {value for value in values if len(value) >= 2}
+
+
+def _fallback_guidance(candidates: list[dict[str, object]]) -> str:
+    """Give deterministic guidance when the model leaves the candidate set."""
+
+    count = len(candidates)
+    if count == 1:
+        return "条件に合うイベントが1件見つかりました。日時・場所・料金は、下のイベントカードを確認してみて。"
+    return f"条件に合うイベントが{count}件見つかりました。気になる番号や、さらに絞りたい条件を教えてみて。"
+
+
+def _has_unapproved_event_claims(
+    answer: str,
+    candidates: list[dict[str, object]],
+) -> bool:
+    """Reject model text that introduces an event outside the JSON candidates."""
+
+    def normalize(value: str) -> str:
+        return re.sub(r"\s+", "", value).strip("「」『』")
+
+    approved_names = {
+        normalize(str(event.get("イベント名", "")))
+        for event in candidates
+        if str(event.get("イベント名", "")).strip()
+    }
+    approved_titles = {
+        name.removeprefix("【PoC架空】").strip()
+        for name in approved_names
+    }
+
+    def is_approved(fragment: str) -> bool:
+        normalized = normalize(fragment)
+        return any(
+            normalized == name
+            or normalized in name
+            or name in normalized
+            for name in approved_names
+        ) or any(
+            normalized == title
+            or normalized in title
+            or title in normalized
+            for title in approved_titles
+        )
+
+    # The model must never invent another fictional event label.
+    for fragment in re.findall(r"【PoC架空】[^\n。！？]{2,160}", answer):
+        if not is_approved(fragment):
+            return True
+
+    # Also reject quoted or marker-bearing event titles that are not cards.
+    event_markers = (
+        "フェス",
+        "フェスタ",
+        "常設展",
+        "企画展",
+        "展示会",
+        "ウォーク",
+        "サロン",
+        "シアター",
+        "ラボ",
+        "コンサート",
+        "講座",
+        "ワークショップ",
+        "公演",
+        "演奏会",
+        "祭",
+        "まつり",
+        "工芸",
+    )
+    for fragment in re.findall(r"[「『]([^」』\n]{3,160})[」』]", answer):
+        if any(marker in fragment for marker in event_markers) and not is_approved(
+            fragment
+        ):
+            return True
+    for marker in event_markers:
+        for match in re.finditer(
+            rf"[^\n。！？]{{0,50}}{re.escape(marker)}[^\n。！？]{{0,50}}",
+            answer,
+        ):
+            if not is_approved(match.group(0)):
+                return True
+
+    # The app supplies a fixed PoC date, so this stock uncertainty is unsafe.
+    return "現在日時が不明" in answer
 
 
 def _redact_event_facts(
