@@ -17,6 +17,9 @@
 - `event_details.py`：参加案内・料金構造・アクセス・雨天・バリアフリーをJSONから直接回答
 - `event_recommendation.py`：同日・終了時刻・市町／地域・タグを使った次イベント／類似イベント推薦
 - `faq_search.py`：8件の一般FAQをローカルで照合（Web検索・RAGなし）
+- `agent_orchestrator.py`：曖昧な探索質問だけをPlanner→固定Tool→必要時Replan→Writerへ渡す bounded Agentic Search
+- `agent_tools.py`：LLMが生成した関数名を実行せず、許可済み6種類の決定論的Toolだけを呼び出すDispatcher
+- `agent_planner.py`：Planner／WriterのJSON検証とModal失敗時のローカルfallback
 - `data/search_metadata.json`：イベント事実を変更せずに別名・検索タグを管理
 - `data/events.schema.json`：v2イベントデータの構造契約
 - Modal：`sbintuitions/sarashina2.2-3b-instruct-v0.1` をT4・4bitで実行
@@ -47,6 +50,16 @@ python tests/run_search_v2_qa.py
 ```bash
 python tests/run_participation_qa.py
 ```
+
+Agentic Searchの件数・年齢条件・条件緩和・Planner/Writer境界は次で確認できます。
+
+```bash
+python tests/run_agentic_search_qa.py
+```
+
+Agentic Searchは、既存Parserで明確に処理できるイベント名・料金・申込・推薦・FAQを経由しません。
+曖昧な探索だけを対象にし、Plannerは検索せず、Writerは件数やイベント事実を書きません。
+件数・候補・イベント事実は固定Toolと`data/events.json`から決定します。
 
 ## 必要なSecrets
 

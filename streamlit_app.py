@@ -10,10 +10,12 @@ from urllib.parse import urlparse
 import requests
 import streamlit as st
 
+import agent_orchestrator
 import event_search
 import event_details
 import event_recommendation
 import recommendation_pending
+from agent_planner import ModalConfig
 from conversation_router import route_conversation
 from app_config import (
     MAX_EVENT_CANDIDATES,
@@ -546,6 +548,34 @@ if prompt:
             # and ordinary search instead.
             st.session_state.pop("pending_recommendation", None)
 
+    agentic_response = None
+    parsed_for_agentic = event_search.parse_query(prompt, POC_REFERENCE_DATE)
+    if not pending_handled and route.action_type == "search" and agent_orchestrator.should_use_agentic_search(
+        prompt,
+        route,
+        parsed_for_agentic,
+    ):
+        conversation_state = {
+            "selected_event_id": (
+                st.session_state.get("selected_event", {}) or {}
+            ).get("id"),
+            "last_result_ids": [str(event.get("id")) for event in previous_results],
+            "last_filters": st.session_state.get("last_filters") or {},
+            "last_results": previous_results,
+            "selected_event": st.session_state.get("selected_event"),
+        }
+        agentic_response = agent_orchestrator.handle_agentic_query(
+            prompt,
+            conversation_state,
+            reference_date=POC_REFERENCE_DATE,
+            modal_config=ModalConfig(modal_url, modal_key, modal_secret),
+        )
+        answer = agent_orchestrator.render_agentic_response(agentic_response)
+        results = list(agentic_response.exact_events)
+        near_results = list(agentic_response.relaxed_events)
+        relaxed_condition = "・".join(agentic_response.relaxed_fields) or None
+        filters = parsed_for_agentic
+
     if pending_handled:
         if pending_decision.event is not None:
             selected_event = dict(pending_decision.event)
@@ -565,6 +595,10 @@ if prompt:
                 results = list(recommendation.events) or previous_results
         else:
             answer = "推薦条件を確認できませんでした。イベント名からもう一度探してみて。"
+    elif agentic_response is not None:
+        # Agentic Search already produced the deterministic result set and the
+        # Writer language above.  Event cards remain rendered from events.json.
+        selected_event = results[0] if len(results) == 1 else None
     elif route.action_type == "reference_followup":
         # Ordinals and pronouns resolve against the last exact result set.
         # Participation facts are answered locally and never sent to Modal.
@@ -704,6 +738,16 @@ if prompt:
             "confidence": search_result.confidence,
             "total_matches": search_result.total_matches,
             "relaxed_condition": search_result.relaxed_condition,
+        }
+    elif agentic_response is not None:
+        st.session_state.last_filters = filters.to_dict() if filters is not None else None
+        st.session_state.last_plan = {
+            "mode": "agentic",
+            "answer_type": agentic_response.answer_type,
+            "planner_rounds": agentic_response.planner_rounds,
+            "search_count": agentic_response.search_count,
+            "total_matches": agentic_response.total_matches,
+            "relaxed_fields": list(agentic_response.relaxed_fields),
         }
     if selected_event is not None:
         st.session_state.selected_event = selected_event
