@@ -1,0 +1,58 @@
+name: Feature final audit QA
+
+on:
+  push:
+    branches:
+      - feature/agentic-search-final-coverage-fix
+
+permissions:
+  contents: read
+
+jobs:
+  qa:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install QA dependencies
+        run: python -m pip install -r requirements.txt jsonschema
+      - name: Search v2 QA
+        run: python tests/run_search_v2_qa.py
+      - name: Participation QA
+        run: python tests/run_participation_qa.py
+      - name: Recommendation QA
+        run: python tests/run_recommendation_qa.py
+      - name: Conversation Router QA
+        run: python tests/run_conversation_router_qa.py
+      - name: Pending Recommendation QA
+        run: python tests/run_pending_recommendation_qa.py
+      - name: Agentic Search QA
+        run: python tests/run_agentic_search_qa.py
+      - name: Security QA
+        run: python tests/run_security_qa.py
+      - name: Final Gate QA
+        run: python tests/run_final_gate_qa.py
+      - name: Python compile
+        run: python -m compileall -q .
+      - name: Schema and data validation
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from jsonschema import Draft202012Validator
+          root = Path('.')
+          schema = json.loads((root / 'data/events.schema.json').read_text(encoding='utf-8'))
+          events = json.loads((root / 'data/events.json').read_text(encoding='utf-8'))
+          Draft202012Validator.check_schema(schema)
+          validator = Draft202012Validator(schema)
+          errors = sorted(validator.iter_errors(events), key=lambda e: list(e.path))
+          if errors:
+              raise SystemExit('\n'.join(str(error) for error in errors[:10]))
+          if len(events) != 30:
+              raise SystemExit(f'expected 30 events, got {len(events)}')
+          print('Schema/Data validation: PASS (30 events)')
+          PY
+      - name: Diff check
+        run: git diff --check origin/main...HEAD
