@@ -164,7 +164,7 @@ def _safe_writer_input(raw_input: Any) -> dict[str, Any]:
     if not isinstance(raw_input, dict):
         return {}
     safe: dict[str, Any] = {}
-    for key in ("query", "answer_type", "total_matches", "relaxed"):
+    for key in ("query", "answer_type", "relaxed"):
         if key in raw_input:
             value = raw_input[key]
             if isinstance(value, (str, int, bool)):

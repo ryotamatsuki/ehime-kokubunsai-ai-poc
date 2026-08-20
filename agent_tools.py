@@ -56,17 +56,23 @@ def _as_strings(value: Any) -> list[str]:
     return []
 
 
-def _as_dates(value: Any) -> list[date]:
+def _as_dates(value: Any) -> list[date] | None:
+    if value is None:
+        return []
+    if not isinstance(value, list) or not value or not all(isinstance(item, str) for item in value):
+        return None
     result: list[date] = []
-    for item in _as_strings(value):
+    for item in value:
         try:
             result.append(date.fromisoformat(item))
         except ValueError:
-            continue
+            return None
     return result
 
 
-def _event_active_on(event: Mapping[str, Any], dates: Sequence[date]) -> bool:
+def _event_active_on(event: Mapping[str, Any], dates: Sequence[date] | None) -> bool:
+    if dates is None:
+        return False
     if not dates:
         return True
     start, end = event_search.parse_event_dates(str(event["日時"]))
@@ -141,6 +147,10 @@ def _matches_age(event: Mapping[str, Any], filters: Mapping[str, Any]) -> bool:
     age = filters.get("age")
     age_group = _normalized(filters.get("age_group", ""))
     age_intent = _normalized(filters.get("age_intent", ""))
+    if age_group and age_group not in {"child", "children", "小学生", "子ども", "こども", "family", "家族"}:
+        return False
+    if age_intent and age_intent not in {"recommended", "対象", "おすすめ", "推奨"}:
+        return False
     wants_child = filters.get("child_friendly") is True or age is not None or age_group in {
         "child",
         "children",
@@ -190,6 +200,8 @@ def _matches_event(event: Mapping[str, Any], filters: Mapping[str, Any]) -> bool
 
     venue = _normalized(filters.get("venue", ""))
     event_venue = str(event.get("屋内/屋外", ""))
+    if venue and venue not in {"屋内", "室内", "indoor", "屋外", "outdoor"}:
+        return False
     if venue in {"屋内", "室内", "indoor"} and event_venue != "屋内":
         return False
     if venue in {"屋外", "outdoor"} and "屋外" not in event_venue:
@@ -289,7 +301,9 @@ def execute_detail_lookup(
     requested_ids = set(_as_strings(spec.filters.get("event_ids")))
     if spec.filters.get("event_id") is not None:
         requested_ids.add(str(spec.filters["event_id"]))
-    matches = [event for event in source_events if not requested_ids or _event_id(event) in requested_ids]
+    if not requested_ids:
+        return _result_for_events(spec, [], "イベントIDが必要です。")
+    matches = [event for event in source_events if _event_id(event) in requested_ids]
     return _result_for_events(spec, matches)
 
 
