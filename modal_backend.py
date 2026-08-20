@@ -35,6 +35,18 @@ WRITER_MAX_NEW_TOKENS = 220
 MAX_CANDIDATES = 8
 SERVICE_ID = "ehime-kokubunsai-ai-poc"
 
+# Modal 1.0 no longer automounts arbitrary local modules.  Keep the semantic
+# command dependency graph explicit so both the model-cache job and the GPU
+# endpoint can import the same trusted command boundary.
+LOCAL_SOURCE_MODULES = (
+    "age_semantics",
+    "app_config",
+    "command_generator",
+    "command_models",
+    "event_details",
+    "flow_registry",
+)
+
 app = modal.App("ehime-kokubunsai-ai-poc-api")
 
 model_volume = modal.Volume.from_name(
@@ -45,6 +57,7 @@ model_volume = modal.Volume.from_name(
 download_image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install("huggingface_hub", "fastapi")
+    .add_local_python_source(*LOCAL_SOURCE_MODULES)
 )
 
 inference_image = (
@@ -57,6 +70,7 @@ inference_image = (
         "sentencepiece",
         "fastapi[standard]",
     )
+    .add_local_python_source(*LOCAL_SOURCE_MODULES)
 )
 
 
