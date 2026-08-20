@@ -320,6 +320,23 @@ def _is_relaxation(key: str, previous: Any, current: Any) -> bool:
     return False
 
 
+def _reservation_filter(query: str) -> bool | None:
+    if re.search(r"(?:予約|事前予約|申込|申し込み).{0,5}(?:不要|なし|なくても|しなくても|せず)", query):
+        return False
+    if re.search(r"(?:予約|事前予約|申込|申し込み).{0,4}(?:必要|必須)", query):
+        return True
+    return None
+
+
+def _colloquial_free(query: str) -> bool:
+    return bool(
+        re.search(
+            r"(?:お金|費用|料金)(?:が|の)?(?:全く)?かからない|(?:お金|費用|料金)をかけず",
+            query,
+        )
+    )
+
+
 def _clean_soft_terms(values: list[str], query: str) -> list[str]:
     generic = {
         "イベント", "ある", "ありますか", "探して", "探す", "楽しめる", "楽しみたい",
@@ -339,6 +356,9 @@ def _clean_soft_terms(values: list[str], query: str) -> list[str]:
         "探して", "探す", "どれくらい", "どのくらい", "どの程度", "何件", "いくつ", "件数",
         "何個", "くらい", "ほど",
     )
+    building_indoor = any(term in query for term in ("建物の中", "建物内"))
+    reservation_semantic = _reservation_filter(query) is not None
+    colloquial_free = _colloquial_free(query)
     terms: list[str] = []
     for value in values:
         cleaned = re.sub(r"(?<!\d)\d{1,2}(?:歳|才)", "", value).strip()
@@ -353,28 +373,22 @@ def _clean_soft_terms(values: list[str], query: str) -> list[str]:
         # content and must not become an exact soft-term predicate.
         cleaned = re.sub(r"^[のはがをにでとやへもか]+", "", cleaned)
         cleaned = re.sub(r"[のはがをにでとやへもか]+$", "", cleaned).strip()
+        # The legacy parser can split a semantic phrase into independent soft
+        # tokens (e.g. 建物の中 -> 建物).  Once the deterministic fallback has
+        # represented that meaning as a structured filter, suppress only those
+        # context-specific residue tokens rather than globally banning them as
+        # legitimate search content.
+        if building_indoor and cleaned in {"建物", "建物内", "中"}:
+            continue
+        if reservation_semantic and any(marker in cleaned for marker in ("予約", "申込", "申し込み")):
+            continue
+        if colloquial_free and any(marker in cleaned for marker in ("お金", "費用", "料金", "かからない", "かけず")):
+            continue
         if cleaned and cleaned not in generic and len(cleaned) >= 2 and cleaned not in terms:
             terms.append(cleaned)
     # Age-only and semantic-constraint discovery have no soft term; do not
     # pass their remaining wording to the deterministic matcher as a keyword.
     return terms[:MAX_FILTER_ITEMS]
-
-
-def _reservation_filter(query: str) -> bool | None:
-    if re.search(r"(?:予約|事前予約|申込|申し込み).{0,5}(?:不要|なし|なくても|しなくても|せず)", query):
-        return False
-    if re.search(r"(?:予約|事前予約|申込|申し込み).{0,4}(?:必要|必須)", query):
-        return True
-    return None
-
-
-def _colloquial_free(query: str) -> bool:
-    return bool(
-        re.search(
-            r"(?:お金|費用|料金)(?:が|の)?(?:全く)?かからない|(?:お金|費用|料金)をかけず",
-            query,
-        )
-    )
 
 
 def fallback_search_plan(query: str, reference_date=POC_REFERENCE_DATE) -> SearchPlan:
