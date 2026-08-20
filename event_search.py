@@ -36,6 +36,7 @@ from app_config import (
     REGION_CITIES,
     SEARCH_METADATA_PATH,
 )
+from event_details import V2_FIELDS, validate_events_v2
 
 
 EVENT_FIELDS: tuple[str, ...] = (
@@ -169,6 +170,8 @@ def load_events(path: str | Path = EVENTS_PATH) -> list[dict[str, Any]]:
     data = json.loads(source.read_text(encoding="utf-8"))
     if not isinstance(data, list) or len(data) != 30:
         raise ValueError("events.json は30件の配列である必要があります。")
+    if data and isinstance(data[0], dict) and V2_FIELDS.issubset(data[0]):
+        return validate_events_v2(data)
     expected_fields = set(EVENT_FIELDS)
     names: set[str] = set()
     urls: set[str] = set()
@@ -253,11 +256,15 @@ def parse_event_dates(value: str) -> tuple[date, date]:
 
 
 def event_city(event: Mapping[str, Any]) -> str | None:
+    if isinstance(event.get("市町"), str) and event["市町"]:
+        return str(event["市町"])
     place = str(event["場所"])
     return next((city for city in sorted(ALL_CITIES, key=len, reverse=True) if city in place), None)
 
 
 def event_region(event: Mapping[str, Any]) -> str | None:
+    if isinstance(event.get("地域"), str) and event["地域"]:
+        return str(event["地域"])
     city = event_city(event)
     return next((region for region, cities in REGION_CITIES.items() if city in cities), None) if city else None
 

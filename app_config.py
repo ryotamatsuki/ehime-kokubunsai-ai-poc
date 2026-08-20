@@ -17,6 +17,8 @@ MAX_EVENT_CANDIDATES = 8
 MAX_SEARCH_RESULTS = MAX_EVENT_CANDIDATES
 EVENT_DATA_PATH = Path(__file__).resolve().parent / "data" / "events.json"
 SEARCH_METADATA_PATH = Path(__file__).resolve().parent / "data" / "search_metadata.json"
+EVENT_SCHEMA_PATH = Path(__file__).resolve().parent / "data" / "events.schema.json"
+GENERAL_FAQ_PATH = Path(__file__).resolve().parent / "data" / "general_faq.json"
 
 
 # The 20 municipalities represented by the attached 30-event dataset.

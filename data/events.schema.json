@@ -1,0 +1,347 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "愛顔えひめの文化祭2028 PoC event data v2",
+  "type": "array",
+  "minItems": 30,
+  "maxItems": 30,
+  "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "id",
+      "データ区分",
+      "イベント名",
+      "aliases",
+      "search_tags",
+      "日時",
+      "start_datetime",
+      "end_datetime",
+      "市町",
+      "地域",
+      "場所",
+      "ジャンル",
+      "子ども向け",
+      "屋内/屋外",
+      "料金",
+      "料金構造",
+      "概要",
+      "参加案内",
+      "アクセス",
+      "雨天時対応",
+      "バリアフリー",
+      "問い合わせ",
+      "公式URL"
+    ],
+    "properties": {
+      "id": {
+        "type": "string",
+        "pattern": "^[0-9]{3}$"
+      },
+      "データ区分": {
+        "const": "PoC架空"
+      },
+      "イベント名": {
+        "type": "string",
+        "minLength": 1
+      },
+      "aliases": {
+        "type": "array",
+        "minItems": 1,
+        "items": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "search_tags": {
+        "type": "array",
+        "minItems": 1,
+        "items": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "日時": {
+        "type": "string",
+        "minLength": 1
+      },
+      "start_datetime": {
+        "type": "string",
+        "format": "date-time"
+      },
+      "end_datetime": {
+        "type": "string",
+        "format": "date-time"
+      },
+      "市町": {
+        "type": "string",
+        "minLength": 1
+      },
+      "地域": {
+        "enum": [
+          "東予",
+          "中予",
+          "南予"
+        ]
+      },
+      "場所": {
+        "type": "string",
+        "minLength": 1
+      },
+      "ジャンル": {
+        "type": "string",
+        "minLength": 1
+      },
+      "子ども向け": {
+        "type": "boolean"
+      },
+      "屋内/屋外": {
+        "enum": [
+          "屋内",
+          "屋外",
+          "屋内・屋外"
+        ]
+      },
+      "料金": {
+        "type": "string",
+        "minLength": 1
+      },
+      "料金構造": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "入場料種別",
+          "一般料金円",
+          "子ども料金円",
+          "追加有料体験",
+          "追加料金円",
+          "備考"
+        ],
+        "properties": {
+          "入場料種別": {
+            "enum": [
+              "無料",
+              "入場無料・一部有料",
+              "有料",
+              "有料・年齢別"
+            ]
+          },
+          "一般料金円": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "子ども料金円": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "追加有料体験": {
+            "type": "boolean"
+          },
+          "追加料金円": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "備考": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "概要": {
+        "type": "string",
+        "minLength": 1
+      },
+      "参加案内": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "申込要否",
+          "申込期限",
+          "定員",
+          "対象",
+          "対象年齢",
+          "備考"
+        ],
+        "properties": {
+          "申込要否": {
+            "enum": [
+              "必要",
+              "不要",
+              "未定"
+            ]
+          },
+          "申込期限": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "定員": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "対象": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "対象年齢": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "備考": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "アクセス": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "公共交通",
+          "駐車場",
+          "駐車場備考"
+        ],
+        "properties": {
+          "公共交通": {
+            "type": "string",
+            "minLength": 1
+          },
+          "駐車場": {
+            "enum": [
+              "あり",
+              "台数限定",
+              "なし"
+            ]
+          },
+          "駐車場備考": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "雨天時対応": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "開催方針",
+          "屋外企画変更",
+          "備考"
+        ],
+        "properties": {
+          "開催方針": {
+            "enum": [
+              "雨天決行",
+              "雨天決行・一部変更あり",
+              "小雨決行・荒天中止",
+              "未定"
+            ]
+          },
+          "屋外企画変更": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "備考": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "バリアフリー": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "車いす",
+          "多目的トイレ",
+          "手話通訳",
+          "備考"
+        ],
+        "properties": {
+          "車いす": {
+            "enum": [
+              "可",
+              "一部可",
+              "不可"
+            ]
+          },
+          "多目的トイレ": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "手話通訳": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "備考": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "問い合わせ": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "窓口",
+          "電話",
+          "メール",
+          "備考"
+        ],
+        "properties": {
+          "窓口": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "電話": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "メール": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "備考": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "公式URL": {
+        "type": "string",
+        "pattern": "^https://example\\.invalid/",
+        "minLength": 1
+      }
+    }
+  }
+}

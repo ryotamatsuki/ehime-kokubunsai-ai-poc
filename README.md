@@ -14,7 +14,11 @@
 
 - Streamlit：自然文入力、検索結果、イベントカード、共通パスワード認証
 - `event_search.py`：30件のJSONを日付・地域・ジャンル・対象・屋内外・料金・キーワードで決定的に検索
+- `event_details.py`：参加案内・料金構造・アクセス・雨天・バリアフリーをJSONから直接回答
+- `event_recommendation.py`：同日・終了時刻・市町／地域・タグを使った次イベント／類似イベント推薦
+- `faq_search.py`：8件の一般FAQをローカルで照合（Web検索・RAGなし）
 - `data/search_metadata.json`：イベント事実を変更せずに別名・検索タグを管理
+- `data/events.schema.json`：v2イベントデータの構造契約
 - Modal：`sbintuitions/sarashina2.2-3b-instruct-v0.1` をT4・4bitで実行
 - LLM：候補イベントに対する短い案内コメントだけを生成
 
@@ -28,11 +32,20 @@
 - 日時・場所・料金などの事実質問はJSONから直接回答し、Modalには送信しない
 - 「その中で無料だけ」「2番目はどこ？」「それはいくら？」のような会話状態を保持
 - 0件時の参考候補は、緩和した条件を明示して exact 結果と分離
+- 参加案内の詳細はModalへ送らず、構造化データから回答
+- 期間開催イベントは日ごとの開催時間として正規化
+- 次イベント推薦は同日・簡易移動バッファを使い、実際の移動時間や別地域を断定しない
 
 100件以上の検索QAは、追加依存なしで次のコマンドから実行できます。
 
 ```bash
 python tests/run_search_v2_qa.py
+```
+
+参加案内・一般FAQ・推薦・候補外生成防止のQAは次で実行できます。
+
+```bash
+python tests/run_participation_qa.py
 ```
 
 ## 必要なSecrets
