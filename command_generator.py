@@ -234,7 +234,9 @@ def build_command_system_prompt(output_format: str = DEFAULT_COMMAND_FORMAT) -> 
         output_rules = (
             "JSONオブジェクトだけを1個返してください。トップレベルの許可キーは"
             "flow、slots、confidenceだけです。\n"
-            "slotsには利用者が実際に述べた条件だけを入れ、空の条件は省略してください。"
+            "slotsには利用者が実際に述べた条件だけを入れ、空の条件は省略してください。\n"
+            "datesには利用者が入力した日付だけを入れてください。stateのreference_dateを"
+            "利用者が指定した日付として補完してはいけません。日付がない場合はdatesを省略してください。"
         )
     else:
         output_rules = (
