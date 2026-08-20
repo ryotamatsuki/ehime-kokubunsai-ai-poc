@@ -131,7 +131,22 @@ check(
     validate_search_plan({"intent": "discover", "answer_type": "list", "searches": [{"search_id": "s1", "tool": "search_events", "purpose": "exact", "filters": {"venue": "宇宙"}}]}) is None,
     "unknown venue was accepted",
 )
+check(
+    validate_search_plan({"intent": "discover", "answer_type": "list", "searches": [{"search_id": "s1", "tool": "search_events", "purpose": "exact", "filters": {"age_group": "家族"}}]}) is None,
+    "unsupported age group was accepted",
+)
+check(
+    validate_search_plan({"intent": "discover", "answer_type": "list", "searches": [{"search_id": "s1", "tool": "search_events", "purpose": "exact", "filters": {"age_intent": "対象"}}]}) is None,
+    "age intent without a child predicate was accepted",
+)
+check(
+    validate_search_plan({"intent": "discover", "answer_type": "list", "searches": [{"search_id": "s1", "tool": "search_events", "purpose": "exact", "filters": {"child_friendly": False}}]}) is None,
+    "false-only child filter was accepted",
+)
 check(validate_writer_output({"lead": "日時は2028-11-03です", "recommended_event_ids": [], "reasons": []}, set()) is None, "writer fact leakage was accepted")
+check(validate_writer_output({"lead": "11月3日です", "recommended_event_ids": [], "reasons": []}, set()) is None, "Japanese date leakage was accepted")
+check(validate_writer_output({"lead": "13時から参加できます", "recommended_event_ids": [], "reasons": []}, set()) is None, "Japanese time leakage was accepted")
+check(validate_writer_output({"lead": "午後1時から参加できます", "recommended_event_ids": [], "reasons": []}, set()) is None, "Japanese meridiem time leakage was accepted")
 check(validate_writer_output({"lead": "無料で予約不要の屋内イベントです", "recommended_event_ids": [], "reasons": []}, set()) is None, "writer semantic fact leakage was accepted")
 check(validate_writer_output({"lead": "候補です", "recommended_event_ids": ["999"], "reasons": []}, {"007"}) is None, "unknown writer event ID was accepted")
 check(execute_detail_lookup(SearchSpec("detail", "get_event_detail", "detail", {}), EVENTS).total_matches == 0, "detail tool without an ID returned all events")
@@ -151,6 +166,30 @@ invalid_replan = SearchPlan(
     (SearchSpec("s1-relaxed", "search_events", "exact", {}),),
 )
 check(validate_replan_plan(invalid_replan, replan_source) is None, "unbounded replan was accepted")
+valid_replan = SearchPlan(
+    "discover",
+    "list",
+    (SearchSpec("s1-relaxed", "search_events", "relaxed", {"child_friendly": True}, True, ("soft_terms",)),),
+)
+check(validate_replan_plan(valid_replan, replan_source) is not None, "valid soft-term relaxation was rejected")
+for previous_filters, changed_filters, relaxed_fields, label in (
+    ({"genres": ["文学"]}, {"genres": ["アート"]}, ("genres",), "genre substitution"),
+    ({"max_entry_fee": 800}, {"max_entry_fee": 100}, ("max_entry_fee",), "lower fee"),
+    ({"venue": "屋内"}, {"venue": "屋外"}, ("venue",), "venue substitution"),
+    ({"soft_terms": ["恐竜"], "child_friendly": True}, {"soft_terms": ["太鼓"], "child_friendly": True}, ("soft_terms",), "soft-term substitution"),
+):
+    previous = SearchPlan(
+        "discover",
+        "list",
+        (SearchSpec("s1", "search_events", "exact", previous_filters),),
+        allow_replan=True,
+    )
+    invalid_weaken = SearchPlan(
+        "discover",
+        "list",
+        (SearchSpec("s1-relaxed", "search_events", "relaxed", changed_filters, True, relaxed_fields),),
+    )
+    check(validate_replan_plan(invalid_weaken, previous) is None, f"non-relaxing {label} was accepted")
 
 # Multiple exact tool results still use one bounded card budget.
 multi_plan = SearchPlan(
