@@ -132,8 +132,23 @@ def _is_pronoun_reference(query: str) -> bool:
     return "それ" in normalized or "そのイベント" in normalized
 
 
+def _contains_named_event_context(query: str) -> bool:
+    normalized = event_search.normalize_query(query)
+    return any(
+        token in normalized
+        for event in event_search.load_events()
+        for token in (
+            str(event["イベント名"]).replace("【PoC架空】", ""),
+            *[str(alias) for alias in event.get("aliases", []) if len(str(alias)) >= 2],
+        )
+        if len(token) >= 2
+    )
+
+
 def _is_detail_followup_without_new_search(query: str, detail_field: str | None) -> bool:
     if not detail_field:
+        return False
+    if _contains_named_event_context(query):
         return False
     normalized = event_search.normalize_query(query)
     explicit_search_terms = (
@@ -160,15 +175,7 @@ def _is_general_faq_context(query: str, faq_match: faq_search.FAQMatch | None) -
     if faq_match is None:
         return False
     normalized = event_search.normalize_query(query)
-    named_event = any(
-        token in normalized
-        for event in event_search.load_events()
-        for token in (
-            str(event["イベント名"]).replace("【PoC架空】", ""),
-            *[str(alias) for alias in event.get("aliases", []) if len(str(alias)) >= 2],
-        )
-        if len(token) >= 2
-    )
+    named_event = _contains_named_event_context(query)
     filters = event_search.parse_query(normalized, POC_REFERENCE_DATE)
     has_event_context = bool(
         named_event or filters.dates or filters.city_groups or filters.region_groups
