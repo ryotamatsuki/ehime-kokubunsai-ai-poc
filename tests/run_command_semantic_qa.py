@@ -250,7 +250,6 @@ def qa_generated_dates_are_grounded() -> None:
             return {
                 "flow": "find_events",
                 "slots": {
-                    "municipalities": ["松山市"],
                     "dates": ["2028-11-03"],
                 },
                 "confidence": "high",
