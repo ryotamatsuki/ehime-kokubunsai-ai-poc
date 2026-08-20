@@ -155,6 +155,15 @@ def _matches_age(event: Mapping[str, Any], filters: Mapping[str, Any]) -> bool:
         "子ども": "preschool",
         "こども": "preschool",
     }.get(age_group, age_group or None)
+    # The dataset has no positive adult-suitability fact.  An adult request
+    # therefore must not be converted into ``child_friendly=True`` or into an
+    # exclusion of every record marked for children.  Keep all records and let
+    # the UI describe only the facts actually present in events.json.
+    if (
+        canonical_group == "adult"
+        or (isinstance(age, int) and not isinstance(age, bool) and age >= 19)
+    ) and filters.get("child_friendly") is not True:
+        return True
     wants_child = filters.get("child_friendly") is True or age is not None or canonical_group is not None
     if not wants_child:
         return True
