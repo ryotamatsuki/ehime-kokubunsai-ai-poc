@@ -633,6 +633,24 @@ class CommandOrchestrator:
 
         values = plan.slots.to_dict()
         values["dates"] = grounded_dates
+        explicit_cities = [
+            str(city)
+            for group in (parsed.city_groups or [])
+            if isinstance(group, (list, tuple))
+            for city in group
+            if str(city).strip()
+        ]
+        if explicit_cities:
+            values["municipalities"] = list(dict.fromkeys(explicit_cities))
+        explicit_regions = [
+            str(region)
+            for group in (parsed.region_groups or [])
+            if isinstance(group, (list, tuple))
+            for region in group
+            if str(region).strip()
+        ]
+        if explicit_regions:
+            values["regions"] = list(dict.fromkeys(explicit_regions))
         normalized_query = event_search.normalize_query(query).replace(" ", "")
         free_is_negated = any(
             phrase in normalized_query
