@@ -446,7 +446,7 @@ def _render_event_card(event: dict[str, object], index: int) -> None:
         st.write(f"会場：{event['屋内/屋外']}")
         st.write(f"料金：{event['料金']}")
         st.caption(str(event["概要"]))
-        if "参加案内" in event:
+        if event_details.V2_FIELDS.issubset(event):
             with st.expander("参加案内・アクセスを見る"):
                 for line in event_details.compact_participation_lines(event):
                     st.write(line)
@@ -594,13 +594,20 @@ if prompt:
             )
             results = previous_results
         else:
-            recommendation = event_recommendation.recommend_next_events(
-                selected_event,
-                event_search.load_events(),
-                POC_REFERENCE_DATE,
-            )
-            answer = recommendation.message
-            results = list(recommendation.events) or previous_results
+            source_events = event_search.load_events()
+            if not event_details.V2_FIELDS.issubset(selected_event) or any(
+                not event_details.V2_FIELDS.issubset(event) for event in source_events
+            ):
+                answer = "次のイベント推薦に必要な構造化データが、まだ読み込み中です。少し待ってからもう一度試してみて。"
+                results = previous_results
+            else:
+                recommendation = event_recommendation.recommend_next_events(
+                    selected_event,
+                    source_events,
+                    POC_REFERENCE_DATE,
+                )
+                answer = recommendation.message
+                results = list(recommendation.events) or previous_results
     elif event_recommendation.is_similar_query(prompt):
         selected_event = st.session_state.get("selected_event")
         if selected_event is None and len(previous_results) == 1:
@@ -613,14 +620,21 @@ if prompt:
             )
             results = previous_results
         else:
-            recommendation = event_recommendation.recommend_similar_events(
-                selected_event,
-                event_search.load_events(),
-                POC_REFERENCE_DATE,
-                preferences=_recommendation_preferences(prompt),
-            )
-            answer = recommendation.message
-            results = list(recommendation.events) or previous_results
+            source_events = event_search.load_events()
+            if not event_details.V2_FIELDS.issubset(selected_event) or any(
+                not event_details.V2_FIELDS.issubset(event) for event in source_events
+            ):
+                answer = "類似イベントの推薦に必要な構造化データが、まだ読み込み中です。少し待ってからもう一度試してみて。"
+                results = previous_results
+            else:
+                recommendation = event_recommendation.recommend_similar_events(
+                    selected_event,
+                    source_events,
+                    POC_REFERENCE_DATE,
+                    preferences=_recommendation_preferences(prompt),
+                )
+                answer = recommendation.message
+                results = list(recommendation.events) or previous_results
     elif event_search.asks_for_nearby(prompt):
         answer = faq_match.answer if _is_general_faq_context(prompt, faq_match) else NEARBY_MESSAGE
     elif event_search.classify_intent(prompt) in {"injection", "out_of_scope"}:
