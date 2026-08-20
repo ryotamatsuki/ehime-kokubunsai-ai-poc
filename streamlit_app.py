@@ -6,7 +6,6 @@ from dataclasses import asdict, dataclass, is_dataclass
 from datetime import date
 from collections.abc import Mapping
 import importlib
-import hmac
 import inspect
 import re
 from functools import lru_cache
@@ -226,19 +225,6 @@ def _required_secret(name: str) -> str:
         st.error("このPoCは現在利用できません。管理者が設定を確認してください。")
         st.stop()
     return value.strip()
-
-
-def _authenticate(app_password: str) -> None:
-    if st.session_state.get("authenticated") is True:
-        return
-    st.subheader("共通パスワード")
-    entered = st.text_input("パスワード", type="password", max_chars=128)
-    if st.button("入室", type="primary"):
-        if hmac.compare_digest(entered, app_password):
-            st.session_state.authenticated = True
-            st.rerun()
-        st.error("パスワードが正しくありません。")
-    st.stop()
 
 
 def _validate_modal_url(url: str) -> str:
@@ -1692,9 +1678,6 @@ def _reset() -> None:
         st.session_state.pop(key, None)
     st.rerun()
 
-
-app_password = _required_secret("APP_PASSWORD")
-_authenticate(app_password)
 
 modal_url = _validate_modal_url(_required_secret("MODAL_URL"))
 modal_key = _required_secret("MODAL_KEY")
