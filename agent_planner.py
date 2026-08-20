@@ -174,17 +174,12 @@ def _validate_filter_semantics(spec: SearchSpec) -> bool:
     if "age_intent" in filters and not any(
         key in filters for key in ("age", "age_group", "child_friendly")
     ):
-        # An intent label alone has no effect in the deterministic matcher.
         return False
     if "venue" in filters and filters["venue"] not in _VALID_VENUES:
         return False
     for key in ("child_friendly", "entry_free", "paid_only", "reservation_required", "rain_preferred"):
         if key in filters and not isinstance(filters[key], bool):
             return False
-    # These predicates are only implemented for their positive form.  A
-    # false-only planner value would be accepted but ignored by the matcher.
-    # reservation_required is intentionally excluded: false means exactly
-    # "申込要否 == 不要" in the deterministic tool.
     for key in ("child_friendly", "entry_free", "paid_only", "rain_preferred"):
         if key in filters and filters[key] is not True:
             return False
@@ -273,7 +268,6 @@ def _is_relaxation(key: str, previous: Any, current: Any) -> bool:
         return len(current) < len(previous) and set(current).issubset(set(previous))
 
     if key in {"child_friendly", "venue", "rain_preferred", "entry_free"}:
-        # The only supported relaxation is removing a positive predicate.
         return current is None and previous in {True, "屋内", "室内", "indoor", "屋外", "outdoor"}
 
     if key == "max_entry_fee":
@@ -368,26 +362,19 @@ def _clean_soft_terms(values: list[str], query: str) -> list[str]:
         for grammar in grammar_terms:
             cleaned = cleaned.replace(grammar, " ")
         cleaned = re.sub(r"\s+", " ", cleaned).strip()
-        # Removing a semantic phrase can leave attached Japanese particles
-        # such as 「で」 in 「建物の中でやる」.  Those are grammar, not search
-        # content and must not become an exact soft-term predicate.
         cleaned = re.sub(r"^[のはがをにでとやへもか]+", "", cleaned)
         cleaned = re.sub(r"[のはがをにでとやへもか]+$", "", cleaned).strip()
-        # The legacy parser can split a semantic phrase into independent soft
-        # tokens (e.g. 建物の中 -> 建物).  Once the deterministic fallback has
-        # represented that meaning as a structured filter, suppress only those
-        # context-specific residue tokens rather than globally banning them as
-        # legitimate search content.
         if building_indoor and cleaned in {"建物", "建物内", "中"}:
             continue
         if reservation_semantic and any(marker in cleaned for marker in ("予約", "申込", "申し込み")):
             continue
-        if colloquial_free and any(marker in cleaned for marker in ("お金", "費用", "料金", "かからない", "かけず")):
+        if colloquial_free and (
+            any(marker in cleaned for marker in ("お金", "費用", "料金", "かからない", "かけず"))
+            or cleaned.endswith("らない")
+        ):
             continue
         if cleaned and cleaned not in generic and len(cleaned) >= 2 and cleaned not in terms:
             terms.append(cleaned)
-    # Age-only and semantic-constraint discovery have no soft term; do not
-    # pass their remaining wording to the deterministic matcher as a keyword.
     return terms[:MAX_FILTER_ITEMS]
 
 
@@ -400,9 +387,6 @@ def fallback_search_plan(query: str, reference_date=POC_REFERENCE_DATE) -> Searc
     if parsed.dates:
         filters["dates"] = list(parsed.dates)
     if parsed.invalid_date:
-        # The matcher treats malformed date filters as a safe zero-match
-        # condition.  Never drop an invalid date and accidentally broaden to
-        # the whole 30-event dataset.
         filters["dates"] = ["invalid-date"]
     municipalities = [city for group in parsed.city_groups for city in group]
     regions = [region for group in parsed.region_groups for region in group]
@@ -445,9 +429,6 @@ def fallback_search_plan(query: str, reference_date=POC_REFERENCE_DATE) -> Searc
         filters["age_group"] = age_group
     if age_intent is not None:
         filters["age_intent"] = age_intent
-        # Recommendation for a child age uses the existing child-friendly fact
-        # as one deterministic signal.  Eligibility queries do not convert
-        # child_friendly=false or a recommendation threshold into a ban.
         if age_intent == "recommended" and (
             (age is not None and age < 18) or (age_group is not None and age_group != "adult")
         ):
@@ -528,8 +509,6 @@ def request_search_plan(
         if plan is not None:
             return plan
         if attempt == 0:
-            # Do not repair arbitrary JSON.  A single deterministic retry only
-            # tells the Planner that the previous object violated the schema.
             payload["state"]["planner_feedback"] = (
                 "前回のJSONはschemaまたはcanonical enumに適合しませんでした。"
                 "許可されたtool/filterとcanonical値だけでJSONオブジェクトを再出力してください。"
@@ -575,8 +554,6 @@ def validate_writer_output(raw: Any, allowed_event_ids: set[str]) -> WriterOutpu
         if len(str(item["reason"])) > 300:
             return None
         parsed_reasons.append({"event_id": str(item["event_id"]), "reason": str(item["reason"])})
-    # Writer output is language only.  Dates, fees and URLs are rendered from
-    # JSON cards by Streamlit, so reject fact-like leakage at this boundary.
     combined = " ".join([lead, follow_up or "", *(item["reason"] for item in parsed_reasons)])
     if _WRITER_FACT_PATTERNS.search(combined):
         return None
