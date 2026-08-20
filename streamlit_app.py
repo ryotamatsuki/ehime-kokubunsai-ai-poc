@@ -323,11 +323,19 @@ def _has_unapproved_event_claims(
         "現在日時では",
         "具体的にお答えすることができません",
         "具体的にお答えできません",
+        "具体的なイベント情報がないため",
+        "確定的な回答はできません",
+        "特定の日やイベントに関するご質問であれば",
         "情報は提供できません",
         "お答えすることができません",
         "お答えできません",
+        "公式サイト",
+        "観光情報サイト",
+        "最新情報を確認",
     )
-    return any(phrase in answer for phrase in unsafe_phrases)
+    return any(phrase in answer for phrase in unsafe_phrases) or bool(
+        re.search(r"(?:https?://|www\.)", answer)
+    )
 
 
 def _redact_event_facts(
@@ -341,7 +349,9 @@ def _redact_event_facts(
         "",
         answer,
     )
+    redacted = re.sub(r"<https?://[^>]+>", "", redacted)
     redacted = re.sub(r"https?://\S+", "", redacted)
+    redacted = re.sub(r"\s*[（(]\s*<\s*$", "", redacted)
     for value in sorted(_event_fact_redactions(candidates), key=len, reverse=True):
         redacted = redacted.replace(value, "この候補")
 
