@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 import re
 from typing import Any, Mapping, Sequence
 
 from event_details import EventSchedule, normalize_schedule
-from event_search import parse_query
+from event_search import normalize_query, parse_query
 
 
 START_TIME_ENTRY = "開始時刻参加"
@@ -31,6 +31,24 @@ class RecommendationDateResolution:
     message: str = ""
 
 
+@dataclass(frozen=True)
+class RecommendationDateAnswer:
+    """Result of parsing a short answer to a pending date question."""
+
+    is_date_like: bool
+    value: date | None = None
+    invalid: bool = False
+
+
+@dataclass(frozen=True)
+class RecommendationTimeAnswer:
+    """Result of parsing a short answer to a pending end-time question."""
+
+    is_time_like: bool
+    value: time | None = None
+    invalid: bool = False
+
+
 def _format_date_ja(value: date) -> str:
     return f"{value.year}年{value.month}月{value.day}日"
 
@@ -38,6 +56,72 @@ def _format_date_ja(value: date) -> str:
 def _parsed_query_dates(query: str, reference_date: date) -> list[date]:
     filters = parse_query(query, reference_date)
     return [date.fromisoformat(value) for value in filters.dates]
+
+
+def parse_recommendation_date_answer(
+    query: str,
+    reference_date: date,
+) -> RecommendationDateAnswer:
+    """Parse only a short, date-shaped reply to a pending date question."""
+
+    normalized = parse_query_text(query)
+    compact = normalized.replace(" ", "")
+    date_like = compact in {"今日", "本日", "明日"} or bool(
+        re.fullmatch(
+            r"(?:(?:20\d{2})年)?\d{1,2}月\d{1,2}日|"
+            r"(?:(?:20\d{2})[/-])?\d{1,2}[/-]\d{1,2}|\d{1,2}日",
+            compact,
+        )
+    )
+    if not date_like:
+        return RecommendationDateAnswer(False)
+    day_match = re.fullmatch(r"(\d{1,2})日", compact)
+    if day_match is not None:
+        try:
+            return RecommendationDateAnswer(
+                True,
+                date(reference_date.year, reference_date.month, int(day_match.group(1))),
+            )
+        except ValueError:
+            return RecommendationDateAnswer(True, invalid=True)
+    parsed = _parsed_query_dates(compact, reference_date)
+    if len(parsed) == 1:
+        return RecommendationDateAnswer(True, parsed[0])
+    return RecommendationDateAnswer(True, invalid=True)
+
+
+def parse_query_text(query: str) -> str:
+    """Normalize a short recommendation answer without broad interpretation."""
+
+    return normalize_query(str(query))
+
+
+def parse_recommendation_time_answer(query: str) -> RecommendationTimeAnswer:
+    """Parse 13時, 13:00, １３時, and 午後1時 style replies."""
+
+    compact = parse_query_text(query).replace(" ", "")
+    match = re.fullmatch(
+        r"(?:(午前|午後))?(\d{1,2})(?:(?::(\d{2}))|時(?:(半)|(?:ごろ|頃|くらい)?)?)?",
+        compact,
+    )
+    if match is None or (match.group(3) is None and "時" not in compact and ":" not in compact):
+        return RecommendationTimeAnswer(False)
+    period, hour_text, minute_text, half = match.groups()
+    hour = int(hour_text)
+    minute = 30 if half else int(minute_text or 0)
+    if period:
+        if hour < 1 or hour > 12:
+            return RecommendationTimeAnswer(True, invalid=True)
+        if period == "午前" and hour == 12:
+            hour = 0
+        elif period == "午後" and hour < 12:
+            hour += 12
+    elif hour > 23 or minute > 59:
+        return RecommendationTimeAnswer(True, invalid=True)
+    try:
+        return RecommendationTimeAnswer(True, time(hour, minute))
+    except ValueError:
+        return RecommendationTimeAnswer(True, invalid=True)
 
 
 def _previous_filter_dates(previous_filters: Mapping[str, Any] | None) -> list[date]:
@@ -94,7 +178,11 @@ def resolve_recommendation_date(
 def is_next_query(query: str) -> bool:
     return any(
         term in query
-        for term in ("このあと", "この後", "そのあと", "その後", "次に", "もう一つ", "行けそう")
+        for term in (
+            "このあと", "この後", "そのあと", "その後", "次に", "もう一つ", "行けそう",
+            "のあと", "の後", "見たあと", "見た後", "終わったあと", "終わった後",
+            "見終わったあと", "見終わった後",
+        )
     )
 
 
@@ -176,6 +264,7 @@ def recommend_next_events(
     reference_date: date,
     *,
     limit: int = 3,
+    selected_end_override: datetime | None = None,
 ) -> RecommendationResult:
     """Find same-day events that start after the selected event can end.
 
@@ -189,6 +278,17 @@ def recommend_next_events(
             message=f"{_format_date_ja(reference_date)}は選択中のイベントの開催期間外なので、このあとの候補は計算できません。"
         )
     selected_end = selected_schedule.ends_at(reference_date)
+    if selected_end_override is not None and str(selected_event.get("参加形式")) == DROP_IN_ENTRY:
+        override = selected_end_override.replace(tzinfo=None)
+        if override.date() != reference_date or not (
+            selected_schedule.starts_at(reference_date)
+            <= override
+            <= selected_schedule.ends_at(reference_date)
+        ):
+            return RecommendationResult(
+                message="イベントの開催時間内で、何時ごろ見終わる予定か教えてみて。"
+            )
+        selected_end = override
     ranked: list[tuple[int, int, dict[str, Any], tuple[str, ...]]] = []
     for index, event in enumerate(events):
         if _event_id(event) == _event_id(selected_event):

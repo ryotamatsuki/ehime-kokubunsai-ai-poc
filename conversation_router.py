@@ -44,6 +44,29 @@ def contains_named_event_context(query: str) -> bool:
     )
 
 
+def named_event_match(query: str) -> Mapping[str, Any] | None:
+    """Return a unique event explicitly named in the current query."""
+
+    normalized = event_search.normalize_query(query)
+    matches: list[Mapping[str, Any]] = []
+    seen: set[str] = set()
+    for event in event_search.load_events():
+        event_id = str(event.get("id") or event["公式URL"])
+        tokens = (
+            str(event["イベント名"]).replace("【PoC架空】", ""),
+            *[
+                str(alias)
+                for alias in event.get("aliases", [])
+                if len(str(alias)) >= 2
+            ],
+        )
+        if any(len(token) >= 2 and token in normalized for token in tokens):
+            if event_id not in seen:
+                matches.append(event)
+                seen.add(event_id)
+    return matches[0] if len(matches) == 1 else None
+
+
 def is_pronoun_reference(query: str) -> bool:
     normalized = event_search.normalize_query(query)
     return "それ" in normalized or "そのイベント" in normalized
@@ -138,6 +161,8 @@ def route_conversation(
     detail_field = event_details.detect_detail_field(query)
     faq_match = faq_search.find_faq(query)
     reference_index = event_search.resolve_reference_index(query, len(last_results))
+    named_event = named_event_match(query)
+    named_context = contains_named_event_context(query)
 
     if last_results and (reference_index is not None or is_pronoun_reference(query)):
         target = None
@@ -166,7 +191,12 @@ def route_conversation(
         )
 
     if event_recommendation.is_next_query(query):
-        target = selected_event or (last_results[0] if len(last_results) == 1 else None)
+        if named_event is not None:
+            target = named_event
+        elif named_context:
+            target = None
+        else:
+            target = selected_event or (last_results[0] if len(last_results) == 1 else None)
         if target is not None:
             return ConversationRoute(
                 "recommend_next",
