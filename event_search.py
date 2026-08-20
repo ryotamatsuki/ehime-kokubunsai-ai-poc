@@ -50,7 +50,11 @@ EVENT_FIELDS: tuple[str, ...] = (
     "概要",
     "公式URL",
 )
-METADATA_FIELDS = ("id", "aliases", "search_tags")
+# ``参加形式`` lives in events.json as recommendation-only metadata.  Keep it
+# in the legacy loader's tolerated fields as well, so a Streamlit checkout
+# that briefly mixes the v2 event data with the legacy validation path can
+# still start and serve the app.
+METADATA_FIELDS = ("id", "aliases", "search_tags", "参加形式")
 OPTIONAL_EVENT_FIELDS = frozenset(METADATA_FIELDS) | V2_FIELDS
 ALL_CITIES: tuple[str, ...] = tuple(
     city for cities in REGION_CITIES.values() for city in cities
