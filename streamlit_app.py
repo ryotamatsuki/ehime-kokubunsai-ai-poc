@@ -76,7 +76,6 @@ def _validate_modal_url(url: str) -> str:
         or parsed.query
         or parsed.fragment
         or "ehime-kokubunsai-ai-poc-api" not in host
-        or "sarashina-chat" in host
     ):
         st.error("新PoC用のModal接続先が正しく設定されていません。")
         st.stop()
@@ -86,12 +85,12 @@ def _validate_modal_url(url: str) -> str:
 def _search_candidates(query: str) -> list[dict[str, object]]:
     """Use Agent B's deterministic interface and cap the current candidates."""
 
-    results = event_search.search_events(
+    result = event_search.search_events(
         query,
         reference_date=POC_REFERENCE_DATE,
         limit=MAX_EVENT_CANDIDATES,
     )
-    return list(results[:MAX_EVENT_CANDIDATES])
+    return list(result.events[:MAX_EVENT_CANDIDATES])
 
 
 def _llm_candidates(
