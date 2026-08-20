@@ -51,6 +51,7 @@ EVENT_FIELDS: tuple[str, ...] = (
     "公式URL",
 )
 METADATA_FIELDS = ("id", "aliases", "search_tags")
+OPTIONAL_EVENT_FIELDS = frozenset(METADATA_FIELDS) | V2_FIELDS
 ALL_CITIES: tuple[str, ...] = tuple(
     city for cities in REGION_CITIES.values() for city in cities
 )
@@ -180,7 +181,11 @@ def load_events(path: str | Path = EVENTS_PATH) -> list[dict[str, Any]]:
         if not isinstance(event, dict) or not expected_fields.issubset(event):
             raise ValueError(f"events.json の {index} 件目の項目が不正です。")
         extras = set(event) - expected_fields
-        if extras - set(METADATA_FIELDS):
+        # A Streamlit restart can briefly observe a mixed checkout while the
+        # repository update is propagating.  Keep the legacy search path
+        # tolerant of v2 fields, but never weaken the strict v2 validator when
+        # all v2 fields are present.
+        if extras - OPTIONAL_EVENT_FIELDS:
             raise ValueError(f"events.json の {index} 件目に未知の項目があります。")
         if not isinstance(event["子ども向け"], bool):
             raise ValueError(f"events.json の {index} 件目の子ども向け値が不正です。")
