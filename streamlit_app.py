@@ -316,8 +316,18 @@ def _has_unapproved_event_claims(
             if not is_approved(match.group(0)):
                 return True
 
-    # The app supplies a fixed PoC date, so this stock uncertainty is unsafe.
-    return "現在日時が不明" in answer
+    # The app supplies a fixed PoC date, so stock uncertainty/refusal text is
+    # unsafe even when the candidate cards themselves are correct.
+    unsafe_phrases = (
+        "現在日時が不明",
+        "現在日時では",
+        "具体的にお答えすることができません",
+        "具体的にお答えできません",
+        "情報は提供できません",
+        "お答えすることができません",
+        "お答えできません",
+    )
+    return any(phrase in answer for phrase in unsafe_phrases)
 
 
 def _redact_event_facts(
