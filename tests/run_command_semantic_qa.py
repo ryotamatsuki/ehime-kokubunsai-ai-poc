@@ -240,12 +240,61 @@ def qa_pending_fast_path() -> None:
     _assert(time_result.latency.generator_calls == 0 and not calls, "pending time used LLM")
 
 
+def qa_generated_dates_are_grounded() -> None:
+    calls: list[dict] = []
+
+    def hallucinating_date(payload):
+        calls.append(dict(payload))
+        query = str(payload.get("query", ""))
+        if "無料" in query:
+            return {
+                "flow": "find_events",
+                "slots": {
+                    "municipalities": ["松山市"],
+                    "entry_free": True,
+                    "dates": ["2028-11-03"],
+                },
+                "confidence": "high",
+            }
+        return {
+            "flow": "plan_event_pair",
+            "slots": {
+                "municipalities": ["松山市"],
+                "visit_count": 2,
+                "dates": ["2028-11-03"],
+            },
+            "confidence": "high",
+        }
+
+    orchestrator = CommandOrchestrator(hallucinating_date, reference_date=REFERENCE_DATE)
+    free = orchestrator.handle_query("松山で無料")
+    _assert(free.total_matches == 4, f"date-free free search was narrowed to today: {free.total_matches}")
+    _assert({event["id"] for event in free.events} == {"001", "002", "028", "030"}, "free search date was fabricated")
+
+    pair_pending = orchestrator.handle_query("松山で2つのイベントを回りたい")
+    _assert(pair_pending.status == "clarification", "date-free pair did not ask for a date")
+    _assert(pair_pending.command.slots.dates == (), "date-free pair retained a generated reference date")
+    state = {
+        "active_flow": pair_pending.flow,
+        "last_command": pair_pending.command.to_dict(),
+        "pending_slots": {},
+    }
+    pair = orchestrator.handle_query("10月22日", state)
+    _assert(pair.latency.generator_calls == 0, "pending date invoked the model")
+    _assert(
+        any({item.first_event_id, item.second_event_id} == {"002", "003"} for item in pair.pairs),
+        "date answer did not produce the expected Matsuyama pair",
+    )
+    _assert(len(calls) == 2, "grounded-date test made an unexpected extra model call")
+
+
 def main() -> None:
     dev, holdout = qa_fixture_contract()
     qa_strict_validation()
     qa_generator_bound()
     qa_deterministic_execution()
     qa_pending_fast_path()
+    qa_generated_dates_are_grounded()
     print(f"Command semantic fixture: DEV {dev} PASS; HOLDOUT {holdout} PASS")
     print("Command strict validation / bounded repair / deterministic flow QA: PASS")
 

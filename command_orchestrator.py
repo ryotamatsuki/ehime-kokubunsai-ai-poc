@@ -600,6 +600,47 @@ class CommandOrchestrator:
         )
 
     @staticmethod
+    def _reconcile_generated_dates(
+        plan: CommandPlan,
+        query: str,
+        state: CommandState,
+    ) -> CommandPlan:
+        """Keep generated date slots grounded in the current user utterance.
+
+        The model receives ``reference_date`` as context, but that context is
+        not a user-specified date.  In particular, a date-free pair request
+        must ask for a day instead of silently planning against the PoC's
+        current date.  Explicit dates are parsed locally and take precedence
+        over a model-generated ISO value.
+        """
+
+        parsed = event_search.parse_query(query, state.reference_date)
+        query_dates = list(parsed.dates)
+        if plan.flow == "plan_event_pair":
+            # A pair is defined for exactly one day.  A range such as
+            # "今週末" therefore remains a clarification rather than being
+            # truncated to an arbitrary day.
+            grounded_dates = query_dates if len(query_dates) == 1 else []
+        elif query_dates:
+            grounded_dates = query_dates
+        elif plan.slots.refine_previous and state.last_command is not None:
+            # Refinement is intentionally scoped to the prior result set; do
+            # not erase a date carried by that already-validated context.
+            return plan
+        else:
+            grounded_dates = []
+
+        if tuple(grounded_dates) == plan.slots.dates:
+            return plan
+        values = plan.slots.to_dict()
+        values["dates"] = grounded_dates
+        return CommandPlan(
+            flow=plan.flow,
+            slots=CommandSlots.from_dict(values),
+            confidence=plan.confidence,
+        )
+
+    @staticmethod
     def _dynamic_missing(plan: CommandPlan, state: CommandState, adapters: DeterministicAdapters) -> tuple[str, ...]:
         required: list[str] = []
         for slot_name in required_slots_for(plan.flow):
@@ -803,6 +844,9 @@ class CommandOrchestrator:
                             repair_calls=max(0, (generated.attempts if generated else 0) - 1),
                         ),
                     )
+
+        if command_plan is None:
+            plan = self._reconcile_generated_dates(plan, value, context)
 
         missing = self._dynamic_missing(plan, context, self.adapters)
         if missing:

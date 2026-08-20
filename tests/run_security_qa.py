@@ -40,7 +40,10 @@ check("requires_proxy_auth=True" in modal_source, "Modal proxy auth was removed"
 check('"公式URL"' not in modal_source, "event URL was passed to Modal")
 
 streamlit_source = (ROOT / "streamlit_app.py").read_text(encoding="utf-8")
-check("APP_PASSWORD" in streamlit_source and "hmac.compare_digest" in streamlit_source, "app password contract changed")
+check("APP_PASSWORD" not in streamlit_source and "hmac.compare_digest" not in streamlit_source, "temporary password-free contract changed")
+check('_required_secret("MODAL_URL")' in streamlit_source, "Modal URL secret contract changed")
+check('_required_secret("MODAL_KEY")' in streamlit_source, "Modal key secret contract changed")
+check('_required_secret("MODAL_SECRET")' in streamlit_source, "Modal secret contract changed")
 check('"Modal-Key"' in streamlit_source and '"Modal-Secret"' in streamlit_source, "Modal header contract changed")
 check('"Authorization"' not in streamlit_source, "unexpected authorization header was introduced")
 check("sarashina-chat" not in streamlit_source, "old service identifier leaked to Streamlit")

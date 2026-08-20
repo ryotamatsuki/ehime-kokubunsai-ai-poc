@@ -21,12 +21,14 @@ def test_new_modal_identifiers_are_isolated():
     assert '"公式URL"' not in source
 
 
-def test_streamlit_auth_and_proxy_contract():
+def test_streamlit_password_free_and_proxy_contract():
     source = (ROOT / "streamlit_app.py").read_text(encoding="utf-8")
-    assert "APP_PASSWORD" in source
-    assert "hmac.compare_digest" in source
-    assert "st.stop()" in source
+    assert "APP_PASSWORD" not in source
+    assert "hmac.compare_digest" not in source
     assert "allow_redirects=False" in source
+    assert '_required_secret("MODAL_URL")' in source
+    assert '_required_secret("MODAL_KEY")' in source
+    assert '_required_secret("MODAL_SECRET")' in source
     assert '"Modal-Key"' in source
     assert '"Modal-Secret"' in source
     assert '"Authorization"' not in source
