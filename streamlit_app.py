@@ -13,6 +13,7 @@ import streamlit as st
 import event_search
 import event_details
 import event_recommendation
+import recommendation_pending
 from conversation_router import route_conversation
 from app_config import (
     MAX_EVENT_CANDIDATES,
@@ -393,6 +394,32 @@ def _render_event_card(event: dict[str, object], index: int) -> None:
         st.link_button("公式URL（PoC架空）", str(event["公式URL"]))
 
 
+def _run_next_recommendation(
+    selected_event: dict[str, object],
+    recommendation_date: date,
+    *,
+    selected_end_override=None,
+) -> tuple[event_recommendation.RecommendationResult | None, str | None]:
+    source_events = event_search.load_events()
+    if not event_details.V2_FIELDS.issubset(selected_event) or any(
+        not event_details.V2_FIELDS.issubset(event) for event in source_events
+    ):
+        return None, "次のイベント推薦に必要な構造化データが、まだ読み込み中です。少し待ってからもう一度試してみて。"
+    return (
+        event_recommendation.recommend_next_events(
+            selected_event,
+            source_events,
+            recommendation_date,
+            selected_end_override=selected_end_override,
+        ),
+        None,
+    )
+
+
+def _is_reset_query(query: str) -> bool:
+    return recommendation_pending.is_reset_query(query)
+
+
 def _reset() -> None:
     for key in (
         "messages",
@@ -405,6 +432,7 @@ def _reset() -> None:
         "last_query",
         "feedback",
         "pending_prompt",
+        "pending_recommendation",
     ):
         st.session_state.pop(key, None)
     st.rerun()
@@ -478,6 +506,8 @@ if prompt:
     if len(prompt) > 500:
         st.error("質問は500文字以内にしてください。")
         st.stop()
+    if _is_reset_query(prompt):
+        _reset()
 
     history = list(st.session_state.messages)
     st.session_state.messages.append({"role": "user", "content": prompt})
@@ -496,8 +526,46 @@ if prompt:
         POC_REFERENCE_DATE,
     )
     detail_field = route.detail_field
+    pending_decision = recommendation_pending.PendingDecision(False)
+    pending_handled = False
+    pending_state_to_store: dict[str, str] | None = None
+    pending_state = st.session_state.get("pending_recommendation")
+    if pending_state:
+        pending_decision = recommendation_pending.resolve_pending_input(
+            prompt,
+            pending_state,
+            event_search.load_events(),
+            POC_REFERENCE_DATE,
+        )
+        if pending_decision.handled:
+            pending_handled = True
+            pending_state_to_store = pending_decision.next_state
+        else:
+            # A non-date/time turn is a new question.  Do not force it through
+            # the pending flow; the normal router handles named events, FAQs,
+            # and ordinary search instead.
+            st.session_state.pop("pending_recommendation", None)
 
-    if route.action_type == "reference_followup":
+    if pending_handled:
+        if pending_decision.event is not None:
+            selected_event = dict(pending_decision.event)
+        results = previous_results
+        if pending_decision.answer is not None:
+            answer = pending_decision.answer
+        elif pending_decision.event is not None and pending_decision.recommendation_date is not None:
+            recommendation, recommendation_error = _run_next_recommendation(
+                dict(pending_decision.event),
+                pending_decision.recommendation_date,
+                selected_end_override=pending_decision.selected_end_override,
+            )
+            if recommendation_error is not None or recommendation is None:
+                answer = recommendation_error or BACKEND_FAILURE_MESSAGE
+            else:
+                answer = recommendation.message
+                results = list(recommendation.events) or previous_results
+        else:
+            answer = "推薦条件を確認できませんでした。イベント名からもう一度探してみて。"
+    elif route.action_type == "reference_followup":
         # Ordinals and pronouns resolve against the last exact result set.
         # Participation facts are answered locally and never sent to Modal.
         filters = event_search.parse_query(prompt, POC_REFERENCE_DATE)
@@ -524,11 +592,8 @@ if prompt:
         results = previous_results
     elif route.action_type == "recommend_next":
         selected_event = dict(route.selected_event) if route.selected_event is not None else None
-        source_events = event_search.load_events()
-        if selected_event is None or not event_details.V2_FIELDS.issubset(selected_event) or any(
-            not event_details.V2_FIELDS.issubset(event) for event in source_events
-        ):
-            answer = "次のイベント推薦に必要な構造化データが、まだ読み込み中です。少し待ってからもう一度試してみて。"
+        if selected_event is None:
+            answer = "次のイベント推薦に必要なイベントを特定できませんでした。イベント名を教えてみて。"
             results = previous_results
         else:
             date_resolution = event_recommendation.resolve_recommendation_date(
@@ -540,14 +605,30 @@ if prompt:
             if date_resolution.recommendation_date is None:
                 answer = date_resolution.message
                 results = previous_results
-            else:
-                recommendation = event_recommendation.recommend_next_events(
+                if date_resolution.message.startswith("期間開催のイベントなので"):
+                    pending_state_to_store = recommendation_pending.make_pending_state(
+                        selected_event,
+                        awaiting="date",
+                    )
+            elif str(selected_event.get("参加形式")) == event_recommendation.DROP_IN_ENTRY:
+                answer = "何時ごろ見終わる予定？"
+                results = previous_results
+                pending_state_to_store = recommendation_pending.make_pending_state(
                     selected_event,
-                    source_events,
+                    awaiting="end_time",
+                    recommendation_date=date_resolution.recommendation_date,
+                )
+            else:
+                recommendation, recommendation_error = _run_next_recommendation(
+                    selected_event,
                     date_resolution.recommendation_date,
                 )
-                answer = recommendation.message
-                results = list(recommendation.events) or previous_results
+                if recommendation_error is not None or recommendation is None:
+                    answer = recommendation_error or BACKEND_FAILURE_MESSAGE
+                    results = previous_results
+                else:
+                    answer = recommendation.message
+                    results = list(recommendation.events) or previous_results
     elif route.action_type == "recommend_similar_without_selection":
         answer = "まず基準にするイベントを1件選んでみて。"
         results = previous_results
@@ -628,6 +709,10 @@ if prompt:
         st.session_state.selected_event = selected_event
     elif search_result is not None:
         st.session_state.selected_event = results[0] if len(results) == 1 else None
+    if pending_state_to_store is None:
+        st.session_state.pop("pending_recommendation", None)
+    else:
+        st.session_state.pending_recommendation = pending_state_to_store
     st.session_state.last_query = prompt
     st.session_state.feedback = None
     st.rerun()
