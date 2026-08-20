@@ -24,13 +24,17 @@ MAX_STRING_LENGTH = 240
 _COUNT_HINTS = ("何件", "いくつ", "件数", "何個", "どれくらい", "どのくらい", "どの程度")
 _VALID_VENUES = frozenset({"屋内", "室内", "屋外", "indoor", "outdoor"})
 _VALID_TIME_SLOTS = frozenset({"午前", "午後", "夕方"})
-_VALID_AGE_GROUPS = frozenset({"child", "children", "小学生", "子ども", "こども", "family", "家族"})
+# The matcher has a single child-friendly boolean, not a family audience
+# taxonomy.  Do not accept labels that would otherwise be silently ignored.
+_VALID_AGE_GROUPS = frozenset({"child", "children", "小学生", "子ども", "こども"})
 _VALID_AGE_INTENTS = frozenset({"recommended", "対象", "おすすめ", "推奨"})
 _RELAXABLE_FILTERS = frozenset(
     {"soft_terms", "genres", "genre_groups", "child_friendly", "venue", "rain_preferred", "entry_free", "max_entry_fee"}
 )
 _WRITER_FACT_PATTERNS = re.compile(
-    r"https?://|www\.|20\d{2}[-年/]\d{1,2}|\d{1,4}円|\d{1,2}:\d{2}|\d{1,4}件|"
+    r"https?://|www\.|20\d{2}[-年/]\d{1,2}|[0-9０-９]{1,2}[月/]\s*[0-9０-９]{1,2}日?|"
+    r"[0-9０-９]{1,2}月[0-9０-９]{1,2}日|(?:午前|午後)?\s*[0-9０-９]{1,2}時(?:半|[0-9０-９]{1,2}分)?|"
+    r"\d{1,4}円|\d{1,2}:\d{2}|\d{1,4}件|"
     r"無料|有料|予約|申込|申し込み|屋内|屋外|室内|会場|場所|開催|日時|時間|料金|"
     r"駐車場|雨天|雨でも|車いす|公式|電話|住所|市|町|対象|入場"
 )
@@ -108,7 +112,7 @@ def _validate_filter_semantics(spec: SearchSpec) -> bool:
     """Reject planner values that the deterministic matcher would ignore."""
 
     filters = spec.filters
-    if spec.tool in {"search_events", "count_events"} and not filters:
+    if spec.tool in {"search_events", "count_events"} and not filters and not spec.relaxed:
         return False
     if spec.tool == "get_event_detail":
         ids = filters.get("event_ids")
@@ -168,10 +172,20 @@ def _validate_filter_semantics(spec: SearchSpec) -> bool:
         return False
     if "age_intent" in filters and filters["age_intent"] not in _VALID_AGE_INTENTS:
         return False
+    if "age_intent" in filters and not any(
+        key in filters for key in ("age", "age_group", "child_friendly")
+    ):
+        # An intent label alone has no effect in the deterministic matcher.
+        return False
     if "venue" in filters and filters["venue"] not in _VALID_VENUES:
         return False
     for key in ("child_friendly", "entry_free", "paid_only", "reservation_required", "rain_preferred"):
         if key in filters and not isinstance(filters[key], bool):
+            return False
+    # These predicates are only implemented for their positive form.  A
+    # false-only planner value would be accepted but ignored by the matcher.
+    for key in ("child_friendly", "entry_free", "paid_only", "rain_preferred"):
+        if key in filters and filters[key] is not True:
             return False
     if "max_entry_fee" in filters:
         fee = filters["max_entry_fee"]
@@ -242,7 +256,67 @@ def validate_replan_plan(raw: Any, previous_plan: SearchPlan) -> SearchPlan | No
             return None
         if any(key not in previous.filters for key in spec.filters):
             return None
+        if not all(_is_relaxation(key, previous.filters.get(key), spec.filters.get(key)) for key in changed):
+            return None
     return plan
+
+
+def _is_relaxation(key: str, previous: Any, current: Any) -> bool:
+    """Return whether a changed filter is strictly weaker for the matcher."""
+
+    if key == "soft_terms":
+        if current is None:
+            return isinstance(previous, list) and bool(previous)
+        if not isinstance(previous, list) or not isinstance(current, list):
+            return False
+        return len(current) < len(previous) and set(current).issubset(set(previous))
+
+    if key in {"child_friendly", "venue", "rain_preferred", "entry_free"}:
+        # The only supported relaxation is removing a positive predicate.
+        return current is None and previous in {True, "屋内", "室内", "indoor", "屋外", "outdoor"}
+
+    if key == "max_entry_fee":
+        if current is None:
+            return isinstance(previous, int) and not isinstance(previous, bool)
+        if isinstance(previous, bool) or isinstance(current, bool):
+            return False
+        return isinstance(previous, int) and isinstance(current, int) and current > previous
+
+    if key == "genres":
+        if current is None:
+            return isinstance(previous, list) and bool(previous)
+        if not isinstance(previous, list) or not isinstance(current, list):
+            return False
+        return len(current) < len(previous) and set(current).issubset(set(previous))
+
+    if key == "genre_groups":
+        if current is None:
+            return isinstance(previous, list) and bool(previous)
+        if not isinstance(previous, list) or not isinstance(current, list) or len(current) > len(previous):
+            return False
+        used: set[int] = set()
+        strictly_weaker = len(current) < len(previous)
+        for new_group in current:
+            if not isinstance(new_group, list):
+                return False
+            match_index = next(
+                (
+                    index
+                    for index, old_group in enumerate(previous)
+                    if index not in used
+                    and isinstance(old_group, list)
+                    and set(old_group).issubset(set(new_group))
+                ),
+                None,
+            )
+            if match_index is None:
+                return False
+            used.add(match_index)
+            if set(new_group) != set(previous[match_index]):
+                strictly_weaker = True
+        return strictly_weaker
+
+    return False
 
 
 def _clean_soft_terms(values: list[str], query: str) -> list[str]:
