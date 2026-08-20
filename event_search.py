@@ -137,6 +137,7 @@ _GENERIC_STOPWORDS = frozenset(
         "子ども",
         "子供",
         "こども",
+        "向け",
         "小学生",
         "小学",
         "親子",
@@ -372,9 +373,23 @@ def _query_dates(query: str, reference_date: date) -> list[date]:
 
     for match in _EXPLICIT_DATE_RE.finditer(normalized):
         year = int(match.group("year") or reference_date.year)
-        found.add(date(year, int(match.group("month")), int(match.group("day"))))
+        try:
+            found.add(date(year, int(match.group("month")), int(match.group("day"))))
+        except ValueError:
+            # User-entered dates are untrusted input.  An invalid date should
+            # produce an empty/clarifying search result, never crash the UI.
+            continue
     for match in _SLASH_DATE_RE.finditer(normalized):
-        found.add(date(reference_date.year, int(match.group("month")), int(match.group("day"))))
+        try:
+            found.add(
+                date(
+                    reference_date.year,
+                    int(match.group("month")),
+                    int(match.group("day")),
+                )
+            )
+        except ValueError:
+            continue
 
     return sorted(found)
 
@@ -601,20 +616,37 @@ def _date_distance(event: Mapping[str, Any], reference_date: date) -> int:
     return 10_000 + (reference_date - end).days
 
 
+def _compact_intent_text(query: str) -> str:
+    """Remove whitespace and punctuation for evasion-resistant intent checks."""
+
+    return re.sub(r"[\W_]+", "", normalize_query(query), flags=re.UNICODE)
+
+
 def classify_intent(query: str) -> str:
     """Classify safety/clarification intents before data filtering."""
 
     normalized = normalize_query(query)
+    compact = _compact_intent_text(normalized)
+    intent_texts = (normalized, compact)
     if any(
-        re.search(pattern, normalized, flags=re.IGNORECASE)
+        re.search(pattern, text, flags=re.IGNORECASE)
+        for text in intent_texts
         for pattern in INJECTION_PATTERNS
     ):
         return "injection"
-    if any(term in normalized for term in NEAR_TERMS) and query_city(normalized) is None:
+    if any(term in text for text in intent_texts for term in NEAR_TERMS) and query_city(normalized) is None:
         return "needs_location"
-    if normalized in {"地域から探す", "地域で探す", "地域"}:
+    if normalized in {"地域から探す", "地域で探す", "地域"} or compact in {
+        "地域から探す",
+        "地域で探す",
+        "地域",
+    }:
         return "needs_region"
-    if any(re.search(pattern, normalized) for pattern in OUT_OF_SCOPE_PATTERNS):
+    if any(
+        re.search(pattern, text)
+        for text in intent_texts
+        for pattern in OUT_OF_SCOPE_PATTERNS
+    ):
         return "out_of_scope"
     return "search"
 

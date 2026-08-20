@@ -18,6 +18,7 @@ def test_new_modal_identifiers_are_isolated():
     assert "sarashina-chat-api" not in source
     assert "sarashina-model-cache" not in source
     assert "requires_proxy_auth=True" in source
+    assert '"公式URL"' not in source
 
 
 def test_streamlit_auth_and_proxy_contract():
@@ -30,4 +31,3 @@ def test_streamlit_auth_and_proxy_contract():
     assert '"Modal-Secret"' in source
     assert '"Authorization"' not in source
     assert "sarashina-chat" not in source
-

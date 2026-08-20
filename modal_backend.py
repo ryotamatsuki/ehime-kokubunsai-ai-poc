@@ -76,7 +76,9 @@ def _safe_candidates(raw_candidates: Any) -> list[dict[str, str]]:
     if not isinstance(raw_candidates, list):
         return []
     safe: list[dict[str, str]] = []
-    allowed_keys = ("イベント名", "日時", "場所", "ジャンル", "料金", "概要", "公式URL")
+    # URLs are card-only facts and must never enter the LLM prompt, even if a
+    # caller bypasses the Streamlit client and calls this endpoint directly.
+    allowed_keys = ("イベント名", "日時", "場所", "ジャンル", "料金", "概要")
     for candidate in raw_candidates[:MAX_CANDIDATES]:
         if not isinstance(candidate, dict):
             continue

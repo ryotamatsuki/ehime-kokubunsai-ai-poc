@@ -33,6 +33,9 @@ NEARBY_MESSAGE = "「近く」の範囲はまだ自動判定していません�
 NO_RESULT_MESSAGE = "条件に合うイベントは見つかりませんでした。日付・地域・料金のどれかを少し変えて探してみん？"
 BACKEND_FAILURE_MESSAGE = "案内の準備に失敗したけん、条件を短くしてもう一度試してみて。"
 EVENT_FACT_FIELDS = ("イベント名", "日時", "場所", "料金", "公式URL")
+_EXPECTED_MODAL_HOST_RE = re.compile(
+    r"^[a-z0-9-]+--ehime-kokubunsai-ai-poc-api(?:-[a-z0-9-]+)*\.modal\.run$"
+)
 
 
 st.set_page_config(page_title=PAGE_TITLE, page_icon="🎭", layout="centered")
@@ -70,12 +73,12 @@ def _validate_modal_url(url: str) -> str:
     host = (parsed.hostname or "").lower()
     if (
         parsed.scheme != "https"
-        or not host.endswith(".modal.run")
+        or not _EXPECTED_MODAL_HOST_RE.fullmatch(host)
         or parsed.username
         or parsed.password
+        or parsed.path not in {"", "/"}
         or parsed.query
         or parsed.fragment
-        or "ehime-kokubunsai-ai-poc-api" not in host
     ):
         st.error("新PoC用のModal接続先が正しく設定されていません。")
         st.stop()
