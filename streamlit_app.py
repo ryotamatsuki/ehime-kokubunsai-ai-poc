@@ -85,15 +85,48 @@ def _validate_modal_url(url: str) -> str:
     return url
 
 
-def _search_candidates(query: str) -> list[dict[str, object]]:
-    """Use Agent B's deterministic interface and cap the current candidates."""
+def _search_result(
+    query: str,
+    *,
+    previous_filters: dict[str, object] | None = None,
+    inherit_previous: bool = False,
+) -> event_search.SearchResult:
+    """Run the local structured search and retain its explanation metadata."""
 
-    result = event_search.search_events(
+    return event_search.search_events(
         query,
         reference_date=POC_REFERENCE_DATE,
+        previous_filters=previous_filters,
+        inherit_previous=inherit_previous,
         limit=MAX_EVENT_CANDIDATES,
     )
-    return list(result.events[:MAX_EVENT_CANDIDATES])
+
+
+def _search_candidates(query: str) -> list[dict[str, object]]:
+    """Backward-compatible helper for callers that only need exact cards."""
+
+    return list(_search_result(query).events[:MAX_EVENT_CANDIDATES])
+
+
+def _facts_answer(
+    events: list[dict[str, object]],
+    requested_field: str,
+) -> str:
+    """Answer factual fields only from the JSON-backed event records."""
+
+    if len(events) == 1:
+        return event_search.attribute_answer(events[0], requested_field)
+    lines = [f"条件に合うイベントは{len(events)}件あります。"]
+    lines.extend(
+        f"- {event_search.attribute_answer(event, requested_field)}"
+        for event in events
+    )
+    return "\n".join(lines)
+
+
+def _is_pronoun_reference(query: str) -> bool:
+    normalized = event_search.normalize_query(query)
+    return "それ" in normalized or "そのイベント" in normalized
 
 
 def _llm_candidates(
@@ -234,7 +267,18 @@ def _render_event_card(event: dict[str, object], index: int) -> None:
 
 
 def _reset() -> None:
-    for key in ("messages", "last_results", "last_query", "feedback", "pending_prompt"):
+    for key in (
+        "messages",
+        "last_results",
+        "last_near_results",
+        "last_relaxed_condition",
+        "last_filters",
+        "selected_event",
+        "last_plan",
+        "last_query",
+        "feedback",
+        "pending_prompt",
+    ):
         st.session_state.pop(key, None)
     st.rerun()
 
@@ -260,6 +304,16 @@ if "messages" not in st.session_state:
     st.session_state.messages = []
 if "last_results" not in st.session_state:
     st.session_state.last_results = []
+if "last_near_results" not in st.session_state:
+    st.session_state.last_near_results = []
+if "last_relaxed_condition" not in st.session_state:
+    st.session_state.last_relaxed_condition = None
+if "last_filters" not in st.session_state:
+    st.session_state.last_filters = None
+if "selected_event" not in st.session_state:
+    st.session_state.selected_event = None
+if "last_plan" not in st.session_state:
+    st.session_state.last_plan = None
 
 with st.sidebar:
     st.header("質問の例")
@@ -281,6 +335,13 @@ if st.session_state.last_results:
     for index, event in enumerate(st.session_state.last_results, start=1):
         _render_event_card(event, index)
 
+if st.session_state.last_near_results:
+    relaxed = st.session_state.last_relaxed_condition or "一部の条件"
+    st.subheader(f"参考候補（「{relaxed}」を外した場合）")
+    st.caption("上の検索結果には含めていません。条件を緩めた候補として表示しています。")
+    for index, event in enumerate(st.session_state.last_near_results, start=1):
+        _render_event_card(event, index)
+
 prompt = st.session_state.pop("pending_prompt", None)
 if prompt is None:
     prompt = st.chat_input("例：11月3日に子どもと行けるイベント")
@@ -294,14 +355,68 @@ if prompt:
     history = list(st.session_state.messages)
     st.session_state.messages.append({"role": "user", "content": prompt})
     results: list[dict[str, object]] = []
+    near_results: list[dict[str, object]] = []
+    relaxed_condition: str | None = None
+    selected_event: dict[str, object] | None = None
+    filters: event_search.SearchFilters | None = None
+    search_result: event_search.SearchResult | None = None
+    previous_results = list(st.session_state.get("last_results", []))
+
     if event_search.asks_for_nearby(prompt):
         answer = NEARBY_MESSAGE
+    elif (
+        previous_results
+        and (
+            event_search.resolve_reference_index(prompt, len(previous_results)) is not None
+            or _is_pronoun_reference(prompt)
+        )
+    ):
+        # Ordinals and pronouns are resolved against the last exact result
+        # set.  They never trigger a new semantic search or an LLM call.
+        filters = event_search.parse_query(prompt, POC_REFERENCE_DATE)
+        reference_index = event_search.resolve_reference_index(prompt, len(previous_results))
+        if reference_index is not None:
+            selected_event = previous_results[reference_index]
+        elif st.session_state.get("selected_event"):
+            selected_event = st.session_state.selected_event
+        elif len(previous_results) == 1:
+            selected_event = previous_results[0]
+        if selected_event and filters.requested_field:
+            answer = event_search.attribute_answer(selected_event, filters.requested_field)
+            results = previous_results
+        elif selected_event:
+            answer = f"選択中のイベントは「{selected_event['イベント名']}」です。カードを確認してみて。"
+            results = previous_results
+        else:
+            answer = "どのイベントを指しているか、番号かイベント名を教えてみて。"
+            results = previous_results
+    elif event_search.classify_intent(prompt) in {"injection", "out_of_scope"}:
+        search_result = _search_result(prompt)
+        answer = search_result.message or GENERIC_SCOPE_MESSAGE
     elif not event_search.looks_like_event_query(prompt):
         answer = GENERIC_SCOPE_MESSAGE
     else:
-        results = _search_candidates(prompt)
+        inherit_previous = event_search.is_refinement_query(prompt) and bool(
+            st.session_state.get("last_filters")
+        )
+        search_result = _search_result(
+            prompt,
+            previous_filters=st.session_state.get("last_filters"),
+            inherit_previous=inherit_previous,
+        )
+        filters = search_result.filters
+        results = list(search_result.events[:MAX_EVENT_CANDIDATES])
+        near_results = list(search_result.near_matches[:MAX_EVENT_CANDIDATES])
+        relaxed_condition = search_result.relaxed_condition
         if not results:
-            answer = NO_RESULT_MESSAGE
+            answer = search_result.message or NO_RESULT_MESSAGE
+        elif filters.intent == "count":
+            answer = f"条件に合うイベントは{search_result.total_matches}件あります。"
+        elif filters.requested_field:
+            # Date, place, fee, venue, and other factual fields are returned
+            # directly from events.json.  Modal is reserved for discovery
+            # guidance over already-filtered candidates.
+            answer = _facts_answer(results, filters.requested_field)
         else:
             answer = _call_modal(
                 modal_url=modal_url,
@@ -313,6 +428,22 @@ if prompt:
             )
     st.session_state.messages.append({"role": "assistant", "content": answer})
     st.session_state.last_results = results
+    st.session_state.last_near_results = near_results
+    st.session_state.last_relaxed_condition = relaxed_condition
+    if filters is not None and search_result is not None:
+        st.session_state.last_filters = filters.to_dict()
+        st.session_state.last_plan = {
+            "intent": filters.intent,
+            "entity": filters.entity,
+            "requested_field": filters.requested_field,
+            "confidence": search_result.confidence,
+            "total_matches": search_result.total_matches,
+            "relaxed_condition": search_result.relaxed_condition,
+        }
+    if selected_event is not None:
+        st.session_state.selected_event = selected_event
+    elif search_result is not None:
+        st.session_state.selected_event = None
     st.session_state.last_query = prompt
     st.session_state.feedback = None
     st.rerun()
