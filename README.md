@@ -12,7 +12,7 @@
 
 ## 構成
 
-- Streamlit：自然文入力、検索結果、イベントカード、共通パスワード認証
+- Streamlit：自然文入力、検索結果、イベントカード（共通パスワード認証は一時無効）
 - `event_search.py`：30件のJSONを日付・地域・ジャンル・対象・屋内外・料金・キーワードで決定的に検索
 - `event_details.py`：参加案内・料金構造・アクセス・雨天・バリアフリーをJSONから直接回答
 - `event_recommendation.py`：同日・終了時刻・市町／地域・タグを使った次イベント／類似イベント推薦
@@ -79,12 +79,13 @@ python tests/run_command_semantic_qa.py
 
 ## 必要なSecrets
 
-新PoCのStreamlitアプリのプロジェクト単位Secretsに、次の4項目を設定します。
+新PoCのStreamlitアプリのプロジェクト単位Secretsに、次の3項目を設定します。
 
-- `APP_PASSWORD`
 - `MODAL_URL`
 - `MODAL_KEY`
 - `MODAL_SECRET`
+
+テスト容易性を優先し、共通パスワード認証は一時的に無効化しています。
 
 Secretの値は、このリポジトリ、README、チャット、ログに保存しないでください。
 
