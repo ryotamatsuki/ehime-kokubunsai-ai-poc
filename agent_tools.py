@@ -14,6 +14,7 @@ from typing import Any, Iterable, Mapping, Sequence
 import event_recommendation
 import event_search
 import faq_search
+from age_semantics import age_match_tier
 from agent_models import SearchSpec, ToolResult
 from app_config import CITY_ALIASES, GENRE_ALIASES, MAX_SEARCH_RESULTS, POC_REFERENCE_DATE
 
@@ -144,28 +145,28 @@ def _matches_soft_terms(event: Mapping[str, Any], filters: Mapping[str, Any]) ->
 
 
 def _matches_age(event: Mapping[str, Any], filters: Mapping[str, Any]) -> bool:
+    """Apply age intent without turning recommendation text into a ban."""
+
+    if filters.get("child_friendly") is True and event.get("子ども向け") is not True:
+        return False
+
     age = filters.get("age")
-    age_group = _normalized(filters.get("age_group", ""))
-    age_intent = _normalized(filters.get("age_intent", ""))
-    if age_group and age_group not in {"child", "children", "小学生", "子ども", "こども", "family", "家族"}:
+    age_group = filters.get("age_group")
+    age_intent = filters.get("age_intent")
+    if age is None and age_group is None:
+        return age_intent is None
+    if age is not None and (isinstance(age, bool) or not isinstance(age, int)):
         return False
-    if age_intent and age_intent not in {"recommended", "対象", "おすすめ", "推奨"}:
+    if age_group is not None and not isinstance(age_group, str):
         return False
-    wants_child = filters.get("child_friendly") is True or age is not None or age_group in {
-        "child",
-        "children",
-        "小学生",
-        "子ども",
-        "こども",
-    }
-    if not wants_child:
-        return True
-    if event.get("子ども向け") is not True:
+    if age_intent is not None and not isinstance(age_intent, str):
         return False
-    # The PoC data only guarantees a child-friendly boolean, not a detailed
-    # age range.  Do not invent one: a numeric age is therefore interpreted as
-    # a recommendation for child-friendly events.
-    return age_intent in {"", "recommended", "対象", "おすすめ", "推奨"} or age_intent is None
+    return age_match_tier(
+        event,
+        age=age,
+        age_group=age_group,
+        age_intent=age_intent,
+    ) > 0
 
 
 def _matches_reservation(event: Mapping[str, Any], filters: Mapping[str, Any]) -> bool:
@@ -176,6 +177,8 @@ def _matches_reservation(event: Mapping[str, Any], filters: Mapping[str, Any]) -
     if requested is True or str(requested) in {"必要", "required"}:
         return value == "必要"
     if requested is False or str(requested) in {"不要", "not_required"}:
+        # Deliberately exclude "未定".  Unknown reservation status is not the
+        # same fact as reservation-free participation.
         return value == "不要"
     return False
 
@@ -238,6 +241,21 @@ def _ranking_score(event: Mapping[str, Any], filters: Mapping[str, Any], referen
             score += 100
         elif _normalized(term) in _normalized(searchable):
             score += 50
+
+    age = filters.get("age")
+    age_group = filters.get("age_group")
+    if age is not None or age_group is not None:
+        tier = age_match_tier(
+            event,
+            age=age if isinstance(age, int) and not isinstance(age, bool) else None,
+            age_group=age_group if isinstance(age_group, str) else None,
+            age_intent=filters.get("age_intent") if isinstance(filters.get("age_intent"), str) else None,
+        )
+        # Strong age matches are intentionally ahead of reference candidates.
+        # The latter remain visible when the data does not say participation is
+        # prohibited, preserving unknown != ineligible.
+        score += 40 if tier == 2 else 5 if tier == 1 else 0
+
     if filters.get("child_friendly") is True and event.get("子ども向け") is True:
         score += 15
     if filters.get("entry_free") is True and event_search.is_entry_free(str(event["料金"])):

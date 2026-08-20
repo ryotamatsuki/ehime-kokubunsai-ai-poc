@@ -2,8 +2,8 @@
 
 This layer is deliberately narrow.  Existing event lookup, participation,
 FAQ, recommendation, injection, and out-of-scope routes remain Fast Path
-branches.  Only under-specified discovery questions use Planner -> fixed
-tools -> optional Replan -> Writer.
+branches.  Only discovery questions whose legacy-parser coverage is incomplete
+use Planner -> fixed tools -> optional Replan -> Writer.
 """
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ from agent_planner import (
 )
 from agent_tools import execute_tool
 from app_config import MAX_SEARCH_RESULTS, POC_REFERENCE_DATE
+from parser_coverage import ParserCoverage, evaluate_parser_coverage
 
 
 MAX_PLANNER_ROUNDS = 2
@@ -40,60 +41,22 @@ class FastDecision:
 
 
 def parser_confidence_is_high(parsed_filters: event_search.SearchFilters, query: str) -> bool:
-    """Identify questions the existing deterministic parser already handles."""
+    """Compatibility wrapper: high confidence now means complete coverage."""
 
-    intent = event_search.classify_intent(query)
-    # Numeric age is intentionally reserved for Agentic Search because the
-    # legacy parser has no age-range field.  Other concrete v2 filters below
-    # are already deterministic and must stay on the Fast Path.
-    normalized_query = event_search.normalize_query(query)
-    if re.search(r"\d{1,2}歳", normalized_query):
-        return False
-    # The legacy count classifier does not cover every colloquial count
-    # phrase (notably 「どれくらい」), so keep those on Agentic Search where
-    # the deterministic count tool preserves the full match total.
-    if any(term in normalized_query for term in ("どれくらい", "どのくらい", "どの程度")):
-        return False
-    if intent in {"count", "lookup", "attribute", "refine"}:
-        return True
-    if parsed_filters.entity and parsed_filters.requested_field:
-        return True
-    if parsed_filters.requested_field and (
-        parsed_filters.soft_terms or parsed_filters.dates or parsed_filters.city_groups
-    ):
-        return True
-    if parsed_filters.dates and (
-        parsed_filters.city_groups
-        or parsed_filters.region_groups
-        or parsed_filters.genres
-        or parsed_filters.venue
-        or parsed_filters.entry_free
-    ):
-        return True
-    if (
-        parsed_filters.city_groups
-        or parsed_filters.region_groups
-        or parsed_filters.genres
-        or parsed_filters.child_friendly is True
-        or parsed_filters.venue
-        or parsed_filters.rain_preferred
-        or parsed_filters.entry_free is not None
-        or parsed_filters.paid_only
-        or parsed_filters.max_entry_fee is not None
-        or parsed_filters.time_slots
-        or parsed_filters.time_after is not None
-    ):
-        return True
-    return False
+    return evaluate_parser_coverage(query, parsed_filters).complete
 
 
 def looks_like_event_discovery(query: str) -> bool:
     normalized = event_search.normalize_query(query)
-    if any(term in normalized for term in ("どれくらい", "どのくらい", "どの程度")):
+    if any(term in normalized for term in ("どれくらい", "どのくらい", "どの程度", "何件", "いくつ", "件数")):
         return True
-    if re.search(r"\d{1,2}歳", normalized) and any(
-        term in normalized for term in ("楽しめる", "おすすめ", "ある", "イベント")
+    if re.search(r"\d{1,2}(?:歳|才)", normalized) and any(
+        term in normalized for term in ("楽しめる", "おすすめ", "参加", "行ける", "ある", "イベント")
     ):
+        return True
+    if any(term in normalized for term in ("幼稚園児", "未就学児", "保育園児", "幼児", "小さい子", "小学生", "中学生", "高校生")):
+        return True
+    if any(term in normalized for term in ("予約なし", "予約不要", "建物の中", "建物内", "お金のかからない", "お金がかからない")):
         return True
     discovery_terms = (
         "イベントある",
@@ -126,19 +89,30 @@ def evaluate_fast_path(
     parsed = event_search.parse_query(query, reference_date)
     if route.action_type in {
         "injection",
+        "scope_search",
         "out_of_scope",
         "reference_followup",
         "detail_followup",
         "general_faq",
         "recommend_next",
         "recommend_similar",
+        "recommend_next_without_selection",
+        "recommend_similar_without_selection",
     }:
         return FastDecision(True, route.action_type)
     if parsed.intent in {"injection", "out_of_scope", "needs_location", "needs_region"}:
         return FastDecision(True, parsed.intent)
-    if parser_confidence_is_high(parsed, query):
-        return FastDecision(True, "high_parser_confidence")
-    return FastDecision(False, "agentic_discovery")
+    # Explicit event-specific facts stay deterministic regardless of discovery
+    # coverage because entity + field already identifies the factual lookup.
+    if parsed.entity and parsed.requested_field:
+        return FastDecision(True, "explicit_event_fact")
+
+    coverage = evaluate_parser_coverage(query, parsed)
+    if coverage.complete:
+        return FastDecision(True, "complete_parser_coverage")
+    if looks_like_event_discovery(query):
+        return FastDecision(False, f"agentic_incomplete_coverage:{coverage.reason}")
+    return FastDecision(True, f"non_discovery:{coverage.reason}")
 
 
 def should_use_agentic_search(
@@ -146,7 +120,7 @@ def should_use_agentic_search(
     route: conversation_router.ConversationRoute,
     parsed_filters: event_search.SearchFilters,
 ) -> bool:
-    """Return true only for ambiguous discovery, never for sensitive routes."""
+    """Use Agentic Search only when discovery coverage is incomplete."""
 
     if route.action_type in {
         "injection",
@@ -157,15 +131,19 @@ def should_use_agentic_search(
         "general_faq",
         "recommend_next",
         "recommend_similar",
+        "recommend_next_without_selection",
+        "recommend_similar_without_selection",
     }:
         return False
     if parsed_filters.entity and parsed_filters.requested_field:
         return False
-    if parser_confidence_is_high(parsed_filters, query):
-        return False
     if event_search.classify_intent(query) in {"injection", "out_of_scope"}:
         return False
-    return looks_like_event_discovery(query)
+
+    coverage = evaluate_parser_coverage(query, parsed_filters)
+    if coverage.complete:
+        return False
+    return route.action_type == "search" and looks_like_event_discovery(query)
 
 
 def _event_id(event: Mapping[str, Any]) -> str:

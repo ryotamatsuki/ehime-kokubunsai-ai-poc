@@ -14,6 +14,7 @@ import re
 from typing import Any, Mapping
 
 import event_search
+from age_semantics import extract_query_age, extract_query_age_group, infer_query_age_intent
 from agent_models import SearchPlan, SearchSpec, WriterOutput
 from app_config import CITY_ALIASES, GENRE_ALIASES, POC_REFERENCE_DATE, REGION_CITIES
 
@@ -24,10 +25,8 @@ MAX_STRING_LENGTH = 240
 _COUNT_HINTS = ("何件", "いくつ", "件数", "何個", "どれくらい", "どのくらい", "どの程度")
 _VALID_VENUES = frozenset({"屋内", "室内", "屋外", "indoor", "outdoor"})
 _VALID_TIME_SLOTS = frozenset({"午前", "午後", "夕方"})
-# The matcher has a single child-friendly boolean, not a family audience
-# taxonomy.  Do not accept labels that would otherwise be silently ignored.
-_VALID_AGE_GROUPS = frozenset({"child", "children", "小学生", "子ども", "こども"})
-_VALID_AGE_INTENTS = frozenset({"recommended", "対象", "おすすめ", "推奨"})
+_VALID_AGE_GROUPS = frozenset({"preschool", "elementary", "junior_high", "high_school", "adult"})
+_VALID_AGE_INTENTS = frozenset({"recommended", "eligible"})
 _RELAXABLE_FILTERS = frozenset(
     {"soft_terms", "genres", "genre_groups", "child_friendly", "venue", "rain_preferred", "entry_free", "max_entry_fee"}
 )
@@ -175,15 +174,12 @@ def _validate_filter_semantics(spec: SearchSpec) -> bool:
     if "age_intent" in filters and not any(
         key in filters for key in ("age", "age_group", "child_friendly")
     ):
-        # An intent label alone has no effect in the deterministic matcher.
         return False
     if "venue" in filters and filters["venue"] not in _VALID_VENUES:
         return False
     for key in ("child_friendly", "entry_free", "paid_only", "reservation_required", "rain_preferred"):
         if key in filters and not isinstance(filters[key], bool):
             return False
-    # These predicates are only implemented for their positive form.  A
-    # false-only planner value would be accepted but ignored by the matcher.
     for key in ("child_friendly", "entry_free", "paid_only", "rain_preferred"):
         if key in filters and filters[key] is not True:
             return False
@@ -272,7 +268,6 @@ def _is_relaxation(key: str, previous: Any, current: Any) -> bool:
         return len(current) < len(previous) and set(current).issubset(set(previous))
 
     if key in {"child_friendly", "venue", "rain_preferred", "entry_free"}:
-        # The only supported relaxation is removing a positive predicate.
         return current is None and previous in {True, "屋内", "室内", "indoor", "屋外", "outdoor"}
 
     if key == "max_entry_fee":
@@ -319,34 +314,79 @@ def _is_relaxation(key: str, previous: Any, current: Any) -> bool:
     return False
 
 
+def _reservation_filter(query: str) -> bool | None:
+    if re.search(r"(?:予約|事前予約|申込|申し込み).{0,5}(?:不要|なし|なくても|しなくても|せず)", query):
+        return False
+    if re.search(r"(?:予約|事前予約|申込|申し込み).{0,4}(?:必要|必須)", query):
+        return True
+    return None
+
+
+def _colloquial_free(query: str) -> bool:
+    return bool(
+        re.search(
+            r"(?:お金|費用|料金)(?:が|の)?(?:全く)?かからない|(?:お金|費用|料金)をかけず",
+            query,
+        )
+    )
+
+
 def _clean_soft_terms(values: list[str], query: str) -> list[str]:
     generic = {
         "イベント", "ある", "ありますか", "探して", "探す", "楽しめる", "楽しみたい",
         "行ける", "行きたい", "おすすめ", "どれくらい", "どのくらい", "どの程度",
-        "何件", "いくつ", "件数", "何個", "好き", "興味", "がいい", "が好き",
+        "何件", "いくつ", "件数", "何個", "好き", "興味", "がいい", "が好き", "くらい", "ほど",
     }
+    semantic_controls = (
+        "予約なし", "予約不要", "予約しなくても", "予約せず", "申込不要", "申し込み不要",
+        "建物の中", "建物内", "お金のかからない", "お金がかからない", "費用がかからない",
+        "料金がかからない", "幼稚園児", "未就学児", "保育園児", "幼児", "小さい子",
+        "小学生", "中学生", "高校生", "大人", "成人",
+    )
+    grammar_terms = (
+        "いくつくらい", "何件くらい", "何個くらい", "イベント", "楽しめる", "楽しみたい",
+        "行ける", "行きたい", "参加できる", "参加したい", "参加", "できる", "できそう",
+        "大丈夫", "やっている", "やって", "やる", "向け", "ある", "ありますか", "おすすめ",
+        "探して", "探す", "どれくらい", "どのくらい", "どの程度", "何件", "いくつ", "件数",
+        "何個", "くらい", "ほど",
+    )
+    building_indoor = any(term in query for term in ("建物の中", "建物内"))
+    reservation_semantic = _reservation_filter(query) is not None
+    colloquial_free = _colloquial_free(query)
     terms: list[str] = []
     for value in values:
-        cleaned = re.sub(r"(?:が)?好き|(?:に)?興味(?:がある)?", "", value).strip()
-        cleaned = re.sub(r"イベント|楽しめる|楽しみたい|行ける|行きたい", "", cleaned).strip()
+        cleaned = re.sub(r"(?<!\d)\d{1,2}(?:歳|才)", "", value).strip()
+        for control in semantic_controls:
+            cleaned = cleaned.replace(control, " ")
+        cleaned = re.sub(r"(?:が)?好き|(?:に)?興味(?:がある)?", "", cleaned).strip()
+        for grammar in grammar_terms:
+            cleaned = cleaned.replace(grammar, " ")
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        cleaned = re.sub(r"^[のはがをにでとやへもか]+", "", cleaned)
+        cleaned = re.sub(r"[のはがをにでとやへもか]+$", "", cleaned).strip()
+        if building_indoor and cleaned in {"建物", "建物内", "中"}:
+            continue
+        if reservation_semantic and any(marker in cleaned for marker in ("予約", "申込", "申し込み")):
+            continue
+        if colloquial_free and (
+            any(marker in cleaned for marker in ("お金", "費用", "料金", "かからない", "かけず"))
+            or cleaned.endswith("らない")
+        ):
+            continue
         if cleaned and cleaned not in generic and len(cleaned) >= 2 and cleaned not in terms:
             terms.append(cleaned)
-    # Age-only discovery has no soft term; do not pass the full user sentence
-    # to the deterministic matcher as a pseudo-keyword.
     return terms[:MAX_FILTER_ITEMS]
 
 
 def fallback_search_plan(query: str, reference_date=POC_REFERENCE_DATE) -> SearchPlan:
     """Create a safe local plan when Modal is unavailable or returns bad JSON."""
 
-    parsed = event_search.parse_query(query, reference_date)
+    normalized = event_search.normalize_query(query)
+    parsed = event_search.parse_query(normalized, reference_date)
     filters: dict[str, Any] = {}
     if parsed.dates:
         filters["dates"] = list(parsed.dates)
     if parsed.invalid_date:
-        # The matcher treats malformed date filters as a safe zero-match
-        # condition.  Never drop an invalid date and accidentally broaden to
-        # the whole 30-event dataset.
         filters["dates"] = ["invalid-date"]
     municipalities = [city for group in parsed.city_groups for city in group]
     regions = [region for group in parsed.region_groups for region in group]
@@ -359,11 +399,13 @@ def fallback_search_plan(query: str, reference_date=POC_REFERENCE_DATE) -> Searc
         filters["genre_groups"] = [list(group) for group in parsed.genre_groups]
     if parsed.venue:
         filters["venue"] = parsed.venue
+    elif any(term in normalized for term in ("建物の中", "建物内")):
+        filters["venue"] = "indoor"
     if parsed.child_friendly:
         filters["child_friendly"] = True
     if parsed.rain_preferred:
         filters["rain_preferred"] = True
-    if parsed.entry_free:
+    if parsed.entry_free or _colloquial_free(normalized):
         filters["entry_free"] = True
     if parsed.paid_only:
         filters["paid_only"] = True
@@ -374,17 +416,29 @@ def fallback_search_plan(query: str, reference_date=POC_REFERENCE_DATE) -> Searc
     if parsed.time_after is not None:
         filters["time_after"] = parsed.time_after
 
-    age_match = re.search(r"(\d{1,2})歳", event_search.normalize_query(query))
-    if age_match:
-        filters["age"] = int(age_match.group(1))
-        filters["age_intent"] = "recommended"
-        filters["child_friendly"] = True
+    reservation = _reservation_filter(normalized)
+    if reservation is not None:
+        filters["reservation_required"] = reservation
 
-    soft_terms = _clean_soft_terms(list(parsed.soft_terms), query)
+    age = extract_query_age(normalized)
+    age_group = extract_query_age_group(normalized)
+    age_intent = infer_query_age_intent(normalized)
+    if age is not None:
+        filters["age"] = age
+    if age_group is not None:
+        filters["age_group"] = age_group
+    if age_intent is not None:
+        filters["age_intent"] = age_intent
+        if age_intent == "recommended" and (
+            (age is not None and age < 18) or (age_group is not None and age_group != "adult")
+        ):
+            filters["child_friendly"] = True
+
+    soft_terms = _clean_soft_terms(list(parsed.soft_terms), normalized)
     if soft_terms:
         filters["soft_terms"] = soft_terms
 
-    is_count = any(hint in query for hint in _COUNT_HINTS)
+    is_count = any(hint in normalized for hint in _COUNT_HINTS)
     tool = "count_events" if is_count else "search_events"
     return SearchPlan(
         intent="count" if is_count else "discover",
@@ -450,10 +504,15 @@ def request_search_plan(
             "last_filters": dict(context.get("last_filters") or {}),
         },
     }
-    for _ in range(2):
+    for attempt in range(2):
         plan = validate_search_plan(_call_modal_json(modal_config, payload))
         if plan is not None:
             return plan
+        if attempt == 0:
+            payload["state"]["planner_feedback"] = (
+                "前回のJSONはschemaまたはcanonical enumに適合しませんでした。"
+                "許可されたtool/filterとcanonical値だけでJSONオブジェクトを再出力してください。"
+            )
     return fallback_search_plan(str(context.get("query", "")), POC_REFERENCE_DATE)
 
 
@@ -495,8 +554,6 @@ def validate_writer_output(raw: Any, allowed_event_ids: set[str]) -> WriterOutpu
         if len(str(item["reason"])) > 300:
             return None
         parsed_reasons.append({"event_id": str(item["event_id"]), "reason": str(item["reason"])})
-    # Writer output is language only.  Dates, fees and URLs are rendered from
-    # JSON cards by Streamlit, so reject fact-like leakage at this boundary.
     combined = " ".join([lead, follow_up or "", *(item["reason"] for item in parsed_reasons)])
     if _WRITER_FACT_PATTERNS.search(combined):
         return None

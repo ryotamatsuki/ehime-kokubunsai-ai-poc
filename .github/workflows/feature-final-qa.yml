@@ -1,0 +1,82 @@
+name: Feature final audit QA
+
+on:
+  push:
+    branches:
+      - feature/agentic-search-final-coverage-fix
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  qa:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install QA dependencies
+        run: python -m pip install -r requirements.txt jsonschema
+      - name: Search v2 QA
+        run: python tests/run_search_v2_qa.py
+      - name: Participation QA
+        run: python tests/run_participation_qa.py
+      - name: Recommendation QA
+        run: python tests/run_recommendation_qa.py
+      - name: Conversation Router QA
+        run: python tests/run_conversation_router_qa.py
+      - name: Pending Recommendation QA
+        run: python tests/run_pending_recommendation_qa.py
+      - name: Agentic Search QA
+        run: python tests/run_agentic_search_qa.py
+      - name: Security QA
+        run: python tests/run_security_qa.py
+      - name: Debug final gate plans
+        run: |
+          python - <<'PY'
+          from agent_planner import fallback_search_plan
+          from event_search import parse_query
+          from app_config import POC_REFERENCE_DATE
+          queries = (
+              '建物の中でやるイベントはいくつくらい？',
+              '予約なしで参加できる松山のイベント',
+              '雨の日でも大丈夫で、お金のかからないイベント',
+              '5歳が楽しめるイベントある？',
+              '幼稚園児が楽しめるイベント',
+          )
+          for q in queries:
+              print('QUERY:', q)
+              print('legacy soft_terms:', parse_query(q, POC_REFERENCE_DATE).soft_terms)
+              print('fallback filters:', fallback_search_plan(q).searches[0].filters)
+          PY
+      - name: Final Gate QA
+        run: python tests/run_final_gate_qa.py
+      - name: Python compile
+        run: python -m compileall -q .
+      - name: Schema and data validation
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from jsonschema.validators import validator_for
+          root = Path('.')
+          schema = json.loads((root / 'data/events.schema.json').read_text(encoding='utf-8'))
+          events = json.loads((root / 'data/events.json').read_text(encoding='utf-8'))
+          Validator = validator_for(schema)
+          Validator.check_schema(schema)
+          validator = Validator(schema)
+          errors = sorted(validator.iter_errors(events), key=lambda e: list(e.path))
+          if errors:
+              raise SystemExit('\n'.join(str(error) for error in errors[:10]))
+          if len(events) != 30:
+              raise SystemExit(f'expected 30 events, got {len(events)}')
+          print('Schema/Data validation: PASS (30 events)')
+          PY
+      - name: Diff check
+        run: git diff --check origin/main...HEAD

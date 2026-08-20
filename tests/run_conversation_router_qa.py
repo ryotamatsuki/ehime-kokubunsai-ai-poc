@@ -141,4 +141,35 @@ ordinal_over_state = route("2番目は雨でも開催？", [opening, saijo], ope
 check(ordinal_over_state.selected_event == saijo, "ordinal did not override session selected event")
 check(ordinal_over_state.detail_field == "rain_policy", "rain detail field was not detected")
 
-print("Conversation Router QA: PASS (20 cases)")
+# 21-27. Recommendation intent must be recognized before generic reference
+# follow-up.  Pronoun/ordinal resolution chooses the seed after that intent is
+# known; a current-turn named event beats stale selected_event state.
+next_pronoun_explicit = route("そのイベントのあと何か行ける？", [haiku], haiku)
+check(next_pronoun_explicit.action_type == "recommend_next", "そのイベント next became reference_followup")
+check(next_pronoun_explicit.selected_event == haiku, "そのイベント next chose wrong seed")
+
+next_pronoun = route("それのあと何か行ける？", [haiku], haiku)
+check(next_pronoun.action_type == "recommend_next", "それ next became reference_followup")
+check(next_pronoun.selected_event == haiku, "それ next chose wrong seed")
+
+next_second = route("2番目のあと何か行ける？", [opening, saijo], opening)
+check(next_second.action_type == "recommend_next", "ordinal next became reference_followup")
+check(next_second.reference_index == 1 and next_second.selected_event == saijo, "ordinal next chose wrong seed")
+
+similar_pronoun_explicit = route("それと似たイベントある？", [haiku], haiku)
+check(similar_pronoun_explicit.action_type == "recommend_similar", "pronoun similar became reference_followup")
+check(similar_pronoun_explicit.selected_event == haiku, "pronoun similar chose wrong seed")
+
+similar_second = route("2番目と似たイベントある？", [opening, saijo], opening)
+check(similar_second.action_type == "recommend_similar", "ordinal similar became reference_followup")
+check(similar_second.reference_index == 1 and similar_second.selected_event == saijo, "ordinal similar chose wrong seed")
+
+named_similar_stale = route("砥部焼と似たイベントある？", [opening], opening)
+check(named_similar_stale.action_type == "recommend_similar", "named similar with stale state was not routed")
+check(named_similar_stale.selected_event == tobe, "named similar did not override stale selected event")
+
+named_similar_no_state = route("砥部焼と似たイベントある？")
+check(named_similar_no_state.action_type == "recommend_similar", "named similar without state was not routed")
+check(named_similar_no_state.selected_event == tobe, "named similar without state chose wrong seed")
+
+print("Conversation Router QA: PASS (27 cases)")
