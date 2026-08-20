@@ -1913,6 +1913,14 @@ if prompt:
         if pending_decision.handled:
             pending_handled = True
             pending_state_to_store = pending_decision.next_state
+            if pending_decision.event is None and pending_decision.answer and any(
+                marker in pending_decision.answer
+                for marker in (
+                    "推薦対象のイベント情報を再取得できませんでした",
+                    "推薦条件を確認できませんでした",
+                )
+            ):
+                event_selection_failed = True
             if pending_decision.answer and any(
                 marker in pending_decision.answer
                 for marker in ("解釈できませんでした", "開催時間内で", "開催期間外")

@@ -141,6 +141,14 @@ def test_failure_states_use_troubled_avatar() -> None:
         )
         == EMOTION_TROUBLED
     )
+    assert (
+        select_assistant_emotion(
+            flow="recommend_next",
+            result_count=2,
+            event_selection_failed=True,
+        )
+        == EMOTION_TROUBLED
+    )
 
 
 def test_success_takes_precedence_over_follow_up_text() -> None:
