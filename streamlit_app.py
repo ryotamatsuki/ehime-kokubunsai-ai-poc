@@ -11,6 +11,9 @@ import requests
 import streamlit as st
 
 import event_search
+import event_details
+import event_recommendation
+import faq_search
 from app_config import (
     MAX_EVENT_CANDIDATES,
     POC_REFERENCE_DATE,
@@ -129,17 +132,91 @@ def _is_pronoun_reference(query: str) -> bool:
     return "それ" in normalized or "そのイベント" in normalized
 
 
+def _is_detail_followup_without_new_search(query: str, detail_field: str | None) -> bool:
+    if not detail_field:
+        return False
+    normalized = event_search.normalize_query(query)
+    explicit_search_terms = (
+        "イベント",
+        "探し",
+        "今日",
+        "本日",
+        "明日",
+        "今週",
+        "来週",
+        "月",
+        "市",
+        "町",
+        "東予",
+        "中予",
+        "南予",
+        "似た",
+        "同じ系統",
+    )
+    return not any(term in normalized for term in explicit_search_terms)
+
+
+def _is_general_faq_context(query: str, faq_match: faq_search.FAQMatch | None) -> bool:
+    if faq_match is None:
+        return False
+    normalized = event_search.normalize_query(query)
+    # These are general PoC questions even when the parser sees a short
+    # residual term such as "予約" or "今日".
+    if faq_match.faq_id == "faq-002" and "イベント" not in normalized:
+        return True
+    named_event = any(
+        token in normalized
+        for event in event_search.load_events()
+        for token in (
+            str(event["イベント名"]).replace("【PoC架空】", ""),
+            *[str(alias) for alias in event.get("aliases", []) if len(str(alias)) >= 2],
+        )
+        if len(token) >= 2
+    )
+    if event_details.detect_detail_field(query) and not named_event and not any(
+        term in normalized for term in ("イベント", "探し", "おすすめ", "楽しめる", "楽しみたい", "見たい", "行きたい")
+    ):
+        return True
+    if faq_match.faq_id == "faq-008" and not named_event:
+        filters = event_search.parse_query(normalized, POC_REFERENCE_DATE)
+        if not filters.dates and not filters.city_groups and not filters.region_groups:
+            return True
+    if any(term in normalized for term in ("イベント", "探し", "今日の", "明日の", "月", "市", "町", "東予", "中予", "南予")):
+        return False
+    filters = event_search.parse_query(normalized, POC_REFERENCE_DATE)
+    return not filters.soft_terms and not filters.dates and not filters.city_groups and not filters.region_groups
+
+
+def _recommendation_preferences(query: str) -> dict[str, object]:
+    filters = event_search.parse_query(query, POC_REFERENCE_DATE)
+    preferences: dict[str, object] = {
+        "child_friendly": filters.child_friendly,
+        "entry_free": filters.entry_free,
+    }
+    if "同じ市町" in query or "同じ市" in query:
+        preferences["scope"] = "city"
+    elif "同じ地域" in query:
+        preferences["scope"] = "region"
+    return preferences
+
+
 def _llm_candidates(
     candidates: list[dict[str, object]],
 ) -> list[dict[str, object]]:
     """Pass only current candidates; URLs remain card-only facts."""
 
+    safe_fields = (
+        "イベント名",
+        "日時",
+        "場所",
+        "ジャンル",
+        "子ども向け",
+        "屋内/屋外",
+        "料金",
+        "概要",
+    )
     return [
-        {
-            key: value
-            for key, value in candidate.items()
-            if key != "公式URL"
-        }
+        {key: candidate[key] for key in safe_fields if key in candidate}
         for candidate in candidates[:MAX_EVENT_CANDIDATES]
     ]
 
@@ -369,6 +446,10 @@ def _render_event_card(event: dict[str, object], index: int) -> None:
         st.write(f"会場：{event['屋内/屋外']}")
         st.write(f"料金：{event['料金']}")
         st.caption(str(event["概要"]))
+        if "参加案内" in event:
+            with st.expander("参加案内・アクセスを見る"):
+                for line in event_details.compact_participation_lines(event):
+                    st.write(line)
         st.link_button("公式URL（PoC架空）", str(event["公式URL"]))
 
 
@@ -467,27 +548,26 @@ if prompt:
     filters: event_search.SearchFilters | None = None
     search_result: event_search.SearchResult | None = None
     previous_results = list(st.session_state.get("last_results", []))
+    detail_field = event_details.detect_detail_field(prompt)
+    faq_match = faq_search.find_faq(prompt)
+    reference_index = event_search.resolve_reference_index(prompt, len(previous_results))
 
-    if event_search.asks_for_nearby(prompt):
-        answer = NEARBY_MESSAGE
-    elif (
-        previous_results
-        and (
-            event_search.resolve_reference_index(prompt, len(previous_results)) is not None
-            or _is_pronoun_reference(prompt)
-        )
+    if previous_results and (
+        reference_index is not None or _is_pronoun_reference(prompt)
     ):
-        # Ordinals and pronouns are resolved against the last exact result
-        # set.  They never trigger a new semantic search or an LLM call.
+        # Ordinals and pronouns resolve against the last exact result set.
+        # Participation facts are answered locally and never sent to Modal.
         filters = event_search.parse_query(prompt, POC_REFERENCE_DATE)
-        reference_index = event_search.resolve_reference_index(prompt, len(previous_results))
         if reference_index is not None:
             selected_event = previous_results[reference_index]
         elif st.session_state.get("selected_event"):
             selected_event = st.session_state.selected_event
         elif len(previous_results) == 1:
             selected_event = previous_results[0]
-        if selected_event and filters.requested_field:
+        if selected_event and detail_field:
+            answer = event_details.answer_event_detail(selected_event, detail_field, prompt)
+            results = previous_results
+        elif selected_event and filters.requested_field:
             answer = event_search.attribute_answer(selected_event, filters.requested_field)
             results = previous_results
         elif selected_event:
@@ -496,9 +576,59 @@ if prompt:
         else:
             answer = "どのイベントを指しているか、番号かイベント名を教えてみて。"
             results = previous_results
+    elif detail_field and _is_detail_followup_without_new_search(prompt, detail_field) and (
+        st.session_state.get("selected_event") is not None or len(previous_results) == 1
+    ):
+        selected_event = st.session_state.get("selected_event") or previous_results[0]
+        answer = event_details.answer_event_detail(selected_event, detail_field, prompt)
+        results = previous_results
+    elif event_recommendation.is_next_query(prompt):
+        selected_event = st.session_state.get("selected_event")
+        if selected_event is None and len(previous_results) == 1:
+            selected_event = previous_results[0]
+        if selected_event is None:
+            answer = (
+                faq_match.answer
+                if _is_general_faq_context(prompt, faq_match)
+                else "まずイベントを1件選んでから、「このあと何か行ける？」と聞いてみて。"
+            )
+            results = previous_results
+        else:
+            recommendation = event_recommendation.recommend_next_events(
+                selected_event,
+                event_search.load_events(),
+                POC_REFERENCE_DATE,
+            )
+            answer = recommendation.message
+            results = list(recommendation.events) or previous_results
+    elif event_recommendation.is_similar_query(prompt):
+        selected_event = st.session_state.get("selected_event")
+        if selected_event is None and len(previous_results) == 1:
+            selected_event = previous_results[0]
+        if selected_event is None:
+            answer = (
+                faq_match.answer
+                if _is_general_faq_context(prompt, faq_match)
+                else "まず基準にするイベントを1件選んでみて。"
+            )
+            results = previous_results
+        else:
+            recommendation = event_recommendation.recommend_similar_events(
+                selected_event,
+                event_search.load_events(),
+                POC_REFERENCE_DATE,
+                preferences=_recommendation_preferences(prompt),
+            )
+            answer = recommendation.message
+            results = list(recommendation.events) or previous_results
+    elif event_search.asks_for_nearby(prompt):
+        answer = faq_match.answer if _is_general_faq_context(prompt, faq_match) else NEARBY_MESSAGE
     elif event_search.classify_intent(prompt) in {"injection", "out_of_scope"}:
         search_result = _search_result(prompt)
         answer = search_result.message or GENERIC_SCOPE_MESSAGE
+    elif _is_general_faq_context(prompt, faq_match):
+        answer = faq_match.answer
+        results = previous_results
     elif not event_search.looks_like_event_query(prompt):
         answer = GENERIC_SCOPE_MESSAGE
     else:
@@ -518,10 +648,11 @@ if prompt:
             answer = search_result.message or NO_RESULT_MESSAGE
         elif filters.intent == "count":
             answer = f"条件に合うイベントは{search_result.total_matches}件あります。"
+        elif detail_field and len(results) == 1:
+            answer = event_details.answer_event_detail(results[0], detail_field, prompt)
         elif filters.requested_field:
-            # Date, place, fee, venue, and other factual fields are returned
-            # directly from events.json.  Modal is reserved for discovery
-            # guidance over already-filtered candidates.
+            # Event facts remain grounded in events.json.  Modal is reserved
+            # for discovery guidance over already-filtered candidates.
             answer = _facts_answer(results, filters.requested_field)
         else:
             answer = _call_modal(
@@ -549,7 +680,7 @@ if prompt:
     if selected_event is not None:
         st.session_state.selected_event = selected_event
     elif search_result is not None:
-        st.session_state.selected_event = None
+        st.session_state.selected_event = results[0] if len(results) == 1 else None
     st.session_state.last_query = prompt
     st.session_state.feedback = None
     st.rerun()
