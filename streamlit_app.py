@@ -160,10 +160,6 @@ def _is_general_faq_context(query: str, faq_match: faq_search.FAQMatch | None) -
     if faq_match is None:
         return False
     normalized = event_search.normalize_query(query)
-    # These are general PoC questions even when the parser sees a short
-    # residual term such as "予約" or "今日".
-    if faq_match.faq_id == "faq-002" and "イベント" not in normalized:
-        return True
     named_event = any(
         token in normalized
         for event in event_search.load_events()
@@ -173,17 +169,25 @@ def _is_general_faq_context(query: str, faq_match: faq_search.FAQMatch | None) -
         )
         if len(token) >= 2
     )
+    filters = event_search.parse_query(normalized, POC_REFERENCE_DATE)
+    has_event_context = bool(
+        named_event or filters.dates or filters.city_groups or filters.region_groups
+    )
+
+    # These FAQ categories are general unless the user supplied a concrete
+    # event/date/place context.  This keeps “これは公式？” and “近くで
+    # 探したい” out of the event search path while preserving event-specific
+    # follow-ups such as “オープニングは予約いる？”.
+    if faq_match.faq_id in {"faq-001", "faq-003", "faq-008"} and not has_event_context:
+        return True
+    if faq_match.faq_id == "faq-002" and not has_event_context and "イベント" not in normalized:
+        return True
     if event_details.detect_detail_field(query) and not named_event and not any(
         term in normalized for term in ("イベント", "探し", "おすすめ", "楽しめる", "楽しみたい", "見たい", "行きたい")
     ):
         return True
-    if faq_match.faq_id == "faq-008" and not named_event:
-        filters = event_search.parse_query(normalized, POC_REFERENCE_DATE)
-        if not filters.dates and not filters.city_groups and not filters.region_groups:
-            return True
-    if any(term in normalized for term in ("イベント", "探し", "今日の", "明日の", "月", "市", "町", "東予", "中予", "南予")):
+    if has_event_context or any(term in normalized for term in ("イベント", "探し", "今日の", "明日の", "月", "市", "町", "東予", "中予", "南予")):
         return False
-    filters = event_search.parse_query(normalized, POC_REFERENCE_DATE)
     return not filters.soft_terms and not filters.dates and not filters.city_groups and not filters.region_groups
 
 
