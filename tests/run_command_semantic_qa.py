@@ -243,7 +243,7 @@ def qa_pending_fast_path() -> None:
 def qa_generated_dates_are_grounded() -> None:
     calls: list[dict] = []
 
-    def hallucinating_date(payload):
+    def incomplete_command(payload):
         calls.append(dict(payload))
         query = str(payload.get("query", ""))
         if "無料" in query:
@@ -251,7 +251,6 @@ def qa_generated_dates_are_grounded() -> None:
                 "flow": "find_events",
                 "slots": {
                     "municipalities": ["松山市"],
-                    "entry_free": True,
                     "dates": ["2028-11-03"],
                 },
                 "confidence": "high",
@@ -266,7 +265,7 @@ def qa_generated_dates_are_grounded() -> None:
             "confidence": "high",
         }
 
-    orchestrator = CommandOrchestrator(hallucinating_date, reference_date=REFERENCE_DATE)
+    orchestrator = CommandOrchestrator(incomplete_command, reference_date=REFERENCE_DATE)
     free = orchestrator.handle_query("松山で無料")
     _assert(free.total_matches == 4, f"date-free free search was narrowed to today: {free.total_matches}")
     _assert({event["id"] for event in free.events} == {"001", "002", "028", "030"}, "free search date was fabricated")
