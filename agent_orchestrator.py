@@ -16,7 +16,14 @@ from typing import Any, Callable, Mapping, Sequence
 import conversation_router
 import event_search
 from agent_models import AgenticResponse, MergedResults, SearchPlan, SearchSpec, ToolResult, WriterOutput
-from agent_planner import ModalConfig, request_replan, request_search_plan, request_writer
+from agent_planner import (
+    ModalConfig,
+    request_replan,
+    request_search_plan,
+    request_writer,
+    validate_replan_plan,
+    validate_search_plan,
+)
 from agent_tools import execute_tool
 from app_config import MAX_SEARCH_RESULTS, POC_REFERENCE_DATE
 
@@ -36,6 +43,17 @@ def parser_confidence_is_high(parsed_filters: event_search.SearchFilters, query:
     """Identify questions the existing deterministic parser already handles."""
 
     intent = event_search.classify_intent(query)
+    # Numeric age is intentionally reserved for Agentic Search because the
+    # legacy parser has no age-range field.  Other concrete v2 filters below
+    # are already deterministic and must stay on the Fast Path.
+    normalized_query = event_search.normalize_query(query)
+    if re.search(r"\d{1,2}歳", normalized_query):
+        return False
+    # The legacy count classifier does not cover every colloquial count
+    # phrase (notably 「どれくらい」), so keep those on Agentic Search where
+    # the deterministic count tool preserves the full match total.
+    if any(term in normalized_query for term in ("どれくらい", "どのくらい", "どの程度")):
+        return False
     if intent in {"count", "lookup", "attribute", "refine"}:
         return True
     if parsed_filters.entity and parsed_filters.requested_field:
@@ -50,6 +68,20 @@ def parser_confidence_is_high(parsed_filters: event_search.SearchFilters, query:
         or parsed_filters.genres
         or parsed_filters.venue
         or parsed_filters.entry_free
+    ):
+        return True
+    if (
+        parsed_filters.city_groups
+        or parsed_filters.region_groups
+        or parsed_filters.genres
+        or parsed_filters.child_friendly is True
+        or parsed_filters.venue
+        or parsed_filters.rain_preferred
+        or parsed_filters.entry_free is not None
+        or parsed_filters.paid_only
+        or parsed_filters.max_entry_fee is not None
+        or parsed_filters.time_slots
+        or parsed_filters.time_after is not None
     ):
         return True
     return False
@@ -168,9 +200,9 @@ def should_replan(plan: SearchPlan, results: Sequence[ToolResult], planner_round
     if len(results) >= MAX_TOTAL_SEARCHES:
         return False
     exact_matches = sum(result.total_matches for result in results if not result.relaxed)
-    if exact_matches >= 3:
+    if exact_matches != 0:
         return False
-    return plan.allow_replan
+    return plan.allow_replan and any("soft_terms" in spec.filters for spec in plan.searches)
 
 
 def summarize_tool_results(results: Sequence[ToolResult]) -> dict[str, Any]:
@@ -227,7 +259,6 @@ def build_writer_payload(
     return {
         "query": query,
         "answer_type": deterministic_facts["answer_type"],
-        "total_matches": deterministic_facts["total_matches"],
         "candidate_ids": [_event_id(event) for event in candidate_events],
         "candidate_summary": [
             {
@@ -338,7 +369,12 @@ def handle_agentic_query(
     if planner_request is None:
         plan = request_search_plan(planner_context, modal_config)
     else:
-        plan = planner_request(planner_context)
+        candidate_plan = planner_request(planner_context)
+        plan = (
+            candidate_plan
+            if isinstance(candidate_plan, SearchPlan) and validate_search_plan(candidate_plan.to_dict()) is not None
+            else request_search_plan({"query": query, "reference_date": reference_date.isoformat()}, None)
+        )
     if not isinstance(plan, SearchPlan):
         plan = request_search_plan({"query": query, "reference_date": reference_date.isoformat()}, None)
 
@@ -365,6 +401,7 @@ def handle_agentic_query(
             next_plan = request_replan(query, current_plan, result_summary, modal_config)
         else:
             next_plan = replan_request(query, current_plan, result_summary)
+            next_plan = validate_replan_plan(next_plan, current_plan)
         if next_plan is None:
             break
         current_plan = next_plan
@@ -380,6 +417,10 @@ def handle_agentic_query(
         writer = deterministic_writer_fallback(facts)
     exact_events = _order_by_writer(merged.exact_events, writer.recommended_event_ids)
     relaxed_events = _order_by_writer(merged.relaxed_events, writer.recommended_event_ids)
+    # The UI has one bounded result-card budget.  Exact matches have priority;
+    # relaxed references use only the remaining slots.
+    exact_events = exact_events[:MAX_SEARCH_RESULTS]
+    relaxed_events = relaxed_events[: max(0, MAX_SEARCH_RESULTS - len(exact_events))]
     return AgenticResponse(
         answer_type=str(facts["answer_type"]),
         total_matches=int(facts["total_matches"]),

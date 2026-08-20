@@ -8,19 +8,32 @@ never becomes executable Python or an event fact.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 import json
 import re
 from typing import Any, Mapping
 
 import event_search
 from agent_models import SearchPlan, SearchSpec, WriterOutput
-from app_config import POC_REFERENCE_DATE
+from app_config import CITY_ALIASES, GENRE_ALIASES, POC_REFERENCE_DATE, REGION_CITIES
 
 
 MAX_PLAN_SEARCHES = 3
 MAX_FILTER_ITEMS = 20
 MAX_STRING_LENGTH = 240
 _COUNT_HINTS = ("何件", "いくつ", "件数", "何個", "どれくらい", "どのくらい", "どの程度")
+_VALID_VENUES = frozenset({"屋内", "室内", "屋外", "indoor", "outdoor"})
+_VALID_TIME_SLOTS = frozenset({"午前", "午後", "夕方"})
+_VALID_AGE_GROUPS = frozenset({"child", "children", "小学生", "子ども", "こども", "family", "家族"})
+_VALID_AGE_INTENTS = frozenset({"recommended", "対象", "おすすめ", "推奨"})
+_RELAXABLE_FILTERS = frozenset(
+    {"soft_terms", "genres", "genre_groups", "child_friendly", "venue", "rain_preferred", "entry_free", "max_entry_fee"}
+)
+_WRITER_FACT_PATTERNS = re.compile(
+    r"https?://|www\.|20\d{2}[-年/]\d{1,2}|\d{1,4}円|\d{1,2}:\d{2}|\d{1,4}件|"
+    r"無料|有料|予約|申込|申し込み|屋内|屋外|室内|会場|場所|開催|日時|時間|料金|"
+    r"駐車場|雨天|雨でも|車いす|公式|電話|住所|市|町|対象|入場"
+)
 
 
 @dataclass(frozen=True)
@@ -91,6 +104,94 @@ def _validate_filter_value(value: Any, depth: int = 0) -> bool:
     return False
 
 
+def _validate_filter_semantics(spec: SearchSpec) -> bool:
+    """Reject planner values that the deterministic matcher would ignore."""
+
+    filters = spec.filters
+    if spec.tool in {"search_events", "count_events"} and not filters:
+        return False
+    if spec.tool == "get_event_detail":
+        ids = filters.get("event_ids")
+        if filters.get("event_id") is None and not (isinstance(ids, list) and ids):
+            return False
+        return True
+    if spec.tool in {"recommend_next_events", "recommend_similar_events"}:
+        return bool(filters.get("selected_event_id") or filters.get("event_id"))
+    if spec.tool == "search_faq":
+        return isinstance(filters.get("query"), str) and bool(filters["query"].strip())
+    if spec.tool not in {"search_events", "count_events"}:
+        return False
+
+    allowed_search_filters = {
+        "dates", "municipalities", "regions", "genres", "genre_groups", "age", "age_group",
+        "age_intent", "child_friendly", "venue", "entry_free", "paid_only", "max_entry_fee",
+        "reservation_required", "rain_preferred", "time_slots", "time_after", "soft_terms",
+    }
+    if set(filters) - allowed_search_filters:
+        return False
+
+    if "dates" in filters:
+        dates = filters["dates"]
+        if not isinstance(dates, list) or not dates:
+            return False
+        try:
+            if not all(isinstance(value, str) for value in dates):
+                return False
+            [date.fromisoformat(value) for value in dates]
+        except ValueError:
+            return False
+    if "municipalities" in filters:
+        municipalities = filters["municipalities"]
+        valid_cities = set(CITY_ALIASES) | set(CITY_ALIASES.values())
+        if not isinstance(municipalities, list) or not municipalities or not all(value in valid_cities for value in municipalities):
+            return False
+    if "regions" in filters:
+        regions = filters["regions"]
+        if not isinstance(regions, list) or not regions or not all(value in REGION_CITIES for value in regions):
+            return False
+    if "genres" in filters:
+        genres = filters["genres"]
+        if not isinstance(genres, list) or not genres or not all(value in GENRE_ALIASES for value in genres):
+            return False
+    if "genre_groups" in filters:
+        groups = filters["genre_groups"]
+        if not isinstance(groups, list) or not groups or not all(
+            isinstance(group, list) and group and all(value in GENRE_ALIASES for value in group)
+            for group in groups
+        ):
+            return False
+    if "age" in filters:
+        age = filters["age"]
+        if isinstance(age, bool) or not isinstance(age, int) or not 0 <= age <= 120:
+            return False
+    if "age_group" in filters and filters["age_group"] not in _VALID_AGE_GROUPS:
+        return False
+    if "age_intent" in filters and filters["age_intent"] not in _VALID_AGE_INTENTS:
+        return False
+    if "venue" in filters and filters["venue"] not in _VALID_VENUES:
+        return False
+    for key in ("child_friendly", "entry_free", "paid_only", "reservation_required", "rain_preferred"):
+        if key in filters and not isinstance(filters[key], bool):
+            return False
+    if "max_entry_fee" in filters:
+        fee = filters["max_entry_fee"]
+        if isinstance(fee, bool) or not isinstance(fee, int) or fee < 0:
+            return False
+    if "time_slots" in filters:
+        slots = filters["time_slots"]
+        if not isinstance(slots, list) or not slots or not all(slot in _VALID_TIME_SLOTS for slot in slots):
+            return False
+    if "time_after" in filters:
+        after = filters["time_after"]
+        if isinstance(after, bool) or not isinstance(after, int) or not 0 <= after <= 24 * 60:
+            return False
+    if "soft_terms" in filters:
+        terms = filters["soft_terms"]
+        if not isinstance(terms, list) or not terms or not all(isinstance(term, str) and term.strip() for term in terms):
+            return False
+    return True
+
+
 def validate_search_plan(raw: Any) -> SearchPlan | None:
     """Validate planner JSON and enforce the bounded search contract."""
 
@@ -98,12 +199,48 @@ def validate_search_plan(raw: Any) -> SearchPlan | None:
         plan = SearchPlan.from_dict(raw)
     except (TypeError, ValueError):
         return None
+    if plan.intent not in {"discover", "count"} or plan.confidence not in {"high", "medium", "low"}:
+        return None
     if len(plan.searches) > MAX_PLAN_SEARCHES:
         return None
     for spec in plan.searches:
         if not all(_validate_filter_value(value) for value in spec.filters.values()):
             return None
-        if spec.relaxed and not spec.relaxed_fields:
+        if not _validate_filter_semantics(spec):
+            return None
+        if spec.relaxed and (
+            not spec.relaxed_fields
+            or spec.purpose != "relaxed"
+            or not set(spec.relaxed_fields).issubset(_RELAXABLE_FILTERS)
+        ):
+            return None
+        if not spec.relaxed and spec.relaxed_fields:
+            return None
+    return plan
+
+
+def validate_replan_plan(raw: Any, previous_plan: SearchPlan) -> SearchPlan | None:
+    """Accept only a bounded, explicitly weaker plan than the prior plan."""
+
+    plan = validate_search_plan(raw.to_dict()) if isinstance(raw, SearchPlan) else validate_search_plan(raw)
+    if plan is None or not plan.searches:
+        return None
+    previous_specs = list(previous_plan.searches)
+    for spec in plan.searches:
+        if not spec.relaxed or not spec.relaxed_fields:
+            return None
+        candidates = [previous for previous in previous_specs if previous.tool == spec.tool]
+        if not candidates:
+            return None
+        previous = candidates[0]
+        changed = {
+            key
+            for key in set(previous.filters) | set(spec.filters)
+            if previous.filters.get(key) != spec.filters.get(key)
+        }
+        if not changed or changed != set(spec.relaxed_fields):
+            return None
+        if any(key not in previous.filters for key in spec.filters):
             return None
     return plan
 
@@ -132,6 +269,11 @@ def fallback_search_plan(query: str, reference_date=POC_REFERENCE_DATE) -> Searc
     filters: dict[str, Any] = {}
     if parsed.dates:
         filters["dates"] = list(parsed.dates)
+    if parsed.invalid_date:
+        # The matcher treats malformed date filters as a safe zero-match
+        # condition.  Never drop an invalid date and accidentally broaden to
+        # the whole 30-event dataset.
+        filters["dates"] = ["invalid-date"]
     municipalities = [city for group in parsed.city_groups for city in group]
     regions = [region for group in parsed.region_groups for region in group]
     if municipalities:
@@ -253,7 +395,7 @@ def request_replan(
         "state": {"previous_plan": previous_plan.to_dict(), "result_summary": dict(result_summary)},
         "replan": True,
     }
-    plan = validate_search_plan(_call_modal_json(modal_config, payload))
+    plan = validate_replan_plan(_call_modal_json(modal_config, payload), previous_plan)
     return plan if plan is not None else _fallback_replan(previous_plan)
 
 
@@ -282,7 +424,7 @@ def validate_writer_output(raw: Any, allowed_event_ids: set[str]) -> WriterOutpu
     # Writer output is language only.  Dates, fees and URLs are rendered from
     # JSON cards by Streamlit, so reject fact-like leakage at this boundary.
     combined = " ".join([lead, follow_up or "", *(item["reason"] for item in parsed_reasons)])
-    if re.search(r"https?://|www\.|20\d{2}[-年/]\d{1,2}|\d{1,4}円|\d{1,2}:\d{2}|\d{1,4}件", combined):
+    if _WRITER_FACT_PATTERNS.search(combined):
         return None
     return WriterOutput(
         lead=lead.strip(),
