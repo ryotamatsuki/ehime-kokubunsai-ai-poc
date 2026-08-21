@@ -56,7 +56,7 @@
     {"id":"B045","category":"composed_discovery","priority":"P1","query":"午後から行けるイベント","expected_command":{"flow":"find_events","slots":{"time_slots":["午後"]}},"expected":{"must_have_results":true}},
     {"id":"B046","category":"composed_discovery","priority":"P1","query":"夕方のイベントを探して","expected_command":{"flow":"find_events","slots":{"time_slots":["夕方"]}},"expected":{"must_have_results":true}},
     {"id":"B047","category":"composed_discovery","priority":"P1","query":"外で体験できて子ども向け","expected_command":{"flow":"find_events","slots":{"venue":"outdoor","audience":"family","topics":["体験"]}},"expected":{"must_have_results":true}},
-    {"id":"B048","category":"composed_discovery","priority":"P1","query":"雨の日でも車いすで行きやすいイベント","expected_command":{"flow":"find_events","slots":{"venue":"indoor","rain_preferred":true,"topics":["車いす"]}},"expected":{"must_have_results":true}},
+    {"id":"B048","category":"composed_discovery","priority":"P1","query":"雨の日に松山で無料の屋内イベント","expected_command":{"flow":"find_events","slots":{"municipalities":["松山市"],"venue":"indoor","rain_preferred":true,"entry_free":true}},"expected":{"contains_event_ids":["001","028","030"]}},
     {"id":"B049","category":"composed_discovery","priority":"P1","query":"食文化で入場無料のイベント","expected_command":{"flow":"find_events","slots":{"topics":["食文化"],"entry_free":true}},"expected":{"contains_event_ids":["021","027"]}},
     {"id":"B050","category":"composed_discovery","priority":"P1","query":"親子で文化体験したい","expected_command":{"flow":"find_events","slots":{"audience":"family","topics":["体験"]}},"expected":{"must_have_results":true}},
 
