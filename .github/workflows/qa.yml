@@ -1,0 +1,49 @@
+name: Deterministic QA
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deterministic-qa-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qa:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deterministic test dependency
+        run: python -m pip install --upgrade pytest
+
+      - name: Compile Python sources
+        run: python -m compileall -q .
+
+      - name: Run standalone deterministic QA
+        run: |
+          python tests/run_search_v2_qa.py
+          python tests/run_conversation_router_qa.py
+          python tests/run_conversational_recovery_qa.py
+          python tests/run_recovery_v2_qa.py
+          python tests/run_participation_qa.py
+          python tests/run_recommendation_qa.py
+          python tests/run_pending_recommendation_qa.py
+          python tests/run_agentic_search_qa.py
+          python tests/run_command_semantic_qa.py
+          python tests/run_security_qa.py
+          python tests/run_recovery_benchmark.py
+
+      - name: Run pytest suite
+        run: python -m pytest -q
