@@ -20,6 +20,7 @@ import agent_tools
 import event_details
 import event_recommendation
 import event_search
+import experience_preferences
 import faq_search
 from agent_models import SearchSpec, ToolResult
 from app_config import MAX_RESULT_SET_SIZE, POC_REFERENCE_DATE
@@ -153,6 +154,9 @@ def _high_confidence_pair_plan(
                 "regions": _flatten_groups(parsed.region_groups),
                 "genres": list(parsed.genres),
                 "topics": topics,
+                "experience_required": list(parsed.experience_required),
+                "experience_preferred": list(parsed.experience_preferred),
+                "experience_excluded": list(parsed.experience_excluded),
                 "audience": (
                     "family"
                     if parsed.child_friendly is True
@@ -408,6 +412,9 @@ class DeterministicAdapters:
             "rain_preferred": parsed.rain_preferred,
             "time_slots": list(parsed.time_slots),
             "time_after": parsed.time_after,
+            "experience_required": list(parsed.experience_required),
+            "experience_preferred": list(parsed.experience_preferred),
+            "experience_excluded": list(parsed.experience_excluded),
             "soft_terms": list(parsed.soft_terms),
             "reference_date": self.reference_date.isoformat(),
         }
@@ -775,6 +782,7 @@ class CommandOrchestrator:
         """
 
         parsed = event_search.parse_query(query, state.reference_date)
+        experience_query = experience_preferences.resolve_experience_query(query)
         query_dates = list(parsed.dates)
         if plan.flow == "plan_event_pair":
             # A pair is defined for exactly one day.  A range such as
@@ -792,6 +800,17 @@ class CommandOrchestrator:
 
         values = plan.slots.to_dict()
         values["dates"] = grounded_dates
+        if experience_preferences.has_release_phrase(query):
+            values["experience_required"] = []
+            values["experience_preferred"] = []
+            values["experience_excluded"] = []
+        elif experience_query.recognized:
+            # Explicit Japanese modifiers are higher-confidence than an LLM's
+            # omission or free-form paraphrase.  Only canonical vocabulary IDs
+            # reach CommandSlots, and the event matcher resolves their facts.
+            values["experience_required"] = list(experience_query.required)
+            values["experience_preferred"] = list(experience_query.preferred)
+            values["experience_excluded"] = list(experience_query.excluded)
         explicit_cities = [
             str(city)
             for group in (parsed.city_groups or [])

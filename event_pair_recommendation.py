@@ -15,6 +15,7 @@ import unicodedata
 from typing import Any, Mapping, Sequence
 
 import age_semantics
+import experience_matcher
 from app_config import CITY_ALIASES
 from event_recommendation import (
     DROP_IN_ENTRY,
@@ -232,6 +233,13 @@ def _matches_filters(
         policy = rain_policy.get("開催方針") if isinstance(rain_policy, Mapping) else ""
         if "屋内" not in event_venue and "決行" not in str(policy):
             return False
+
+    if not experience_matcher.matches_experience(
+        event,
+        required=_as_values(filters.get("experience_required")),
+        excluded=_as_values(filters.get("experience_excluded")),
+    ):
+        return False
 
     schedule = normalize_schedule(event)
     time_after = filters.get("time_after")

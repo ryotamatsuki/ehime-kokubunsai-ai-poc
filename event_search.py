@@ -19,6 +19,8 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 import age_semantics
+import experience_matcher
+import experience_preferences
 from app_config import (
     CHILD_TERMS,
     CITY_ALIASES,
@@ -125,6 +127,9 @@ class SearchFilters:
     region_groups: list[list[str]] = field(default_factory=list)
     genres: list[str] = field(default_factory=list)
     genre_groups: list[list[str]] = field(default_factory=list)
+    experience_required: list[str] = field(default_factory=list)
+    experience_preferred: list[str] = field(default_factory=list)
+    experience_excluded: list[str] = field(default_factory=list)
     child_friendly: bool | None = None
     age: int | None = None
     age_group: str | None = None
@@ -211,6 +216,10 @@ def topics_to_legacy_soft_terms(topics: Iterable[str] | str | None) -> list[str]
         if not term or len(term) > 80 or "\x00" in term:
             continue
         if age_semantics.is_age_query_term(term):
+            continue
+        if experience_preferences.is_experience_phrase(term):
+            # Experience language belongs to the typed experience slots.  Do
+            # not let a mapping-based adapter reintroduce it as a keyword.
             continue
         normalized_audience = age_semantics.normalize_audience(term)
         if normalized_audience is not None:
@@ -397,6 +406,29 @@ def command_slots_to_search_filters(
         boolean_values[field_name] = value
 
     topic_terms = topics_to_legacy_soft_terms(_command_slot_value(slots, "topics"))
+    experience_fields: dict[str, list[str]] = {}
+    for field_name in (
+        "experience_required",
+        "experience_preferred",
+        "experience_excluded",
+    ):
+        try:
+            experience_fields[field_name] = list(
+                experience_preferences.normalize_concept_ids(
+                    _command_slot_value(slots, field_name),
+                    field_name=field_name,
+                )
+            )
+        except experience_preferences.ExperienceVocabularyError as exc:
+            raise ValueError(str(exc)) from exc
+    try:
+        experience_preferences.ExperienceQuery(
+            required=experience_fields["experience_required"],
+            preferred=experience_fields["experience_preferred"],
+            excluded=experience_fields["experience_excluded"],
+        )
+    except experience_preferences.ExperienceVocabularyError as exc:
+        raise ValueError(str(exc)) from exc
     flow_name = flow or _command_slot_value(slots, "flow")
     intent = {
         "find_events": "discover",
@@ -439,6 +471,9 @@ def command_slots_to_search_filters(
         max_entry_fee=max_entry_fee,
         time_slots=time_slots,
         time_after=time_after,
+        experience_required=experience_fields["experience_required"],
+        experience_preferred=experience_fields["experience_preferred"],
+        experience_excluded=experience_fields["experience_excluded"],
         keywords=list(topic_terms),
         soft_terms=list(topic_terms),
         intent=intent,
@@ -796,7 +831,7 @@ def _extract_soft_terms(query: str, *, include_unknown_residual: bool = False) -
     while the CommandSlots path is rolled out.
     """
 
-    normalized = normalize_query(query)
+    normalized = normalize_query(experience_preferences.remove_experience_phrases(query))
     work = _remove_question_language(normalized)
 
     # Remove municipality vocabulary before matching metadata aliases.  This
@@ -894,6 +929,7 @@ def parse_query(
     """
 
     normalized = normalize_query(query)
+    experience_query = experience_preferences.resolve_experience_query(normalized)
     age_query = age_semantics.query_age_semantics(normalized)
     dates, invalid_date = _query_dates(normalized, reference_date)
     city_groups = _query_city_groups(normalized)
@@ -952,6 +988,9 @@ def parse_query(
         paid_only=paid_requested,
         max_entry_fee=int(fee_limit.group("amount").replace(",", "")) if fee_limit else None,
         time_slots=time_slots, time_after=time_after, keywords=soft_terms, soft_terms=soft_terms,
+        experience_required=list(experience_query.required),
+        experience_preferred=list(experience_query.preferred),
+        experience_excluded=list(experience_query.excluded),
         reservation_required=reservation_required,
         intent=intent, entity=_extract_entity(soft_terms, normalized), requested_field=requested_field,
         invalid_date=invalid_date,
@@ -972,7 +1011,7 @@ def merge_filters(current: SearchFilters, previous: Mapping[str, Any] | None) ->
     if not previous:
         return current
     merged = current.to_dict()
-    for key in ("dates", "city", "region", "city_groups", "region_groups", "genres", "genre_groups", "child_friendly", "age", "age_group", "age_intent", "venue", "rain_preferred", "entry_free", "paid_only", "max_entry_fee", "reservation_required", "time_slots", "time_after", "soft_terms", "keywords"):
+    for key in ("dates", "city", "region", "city_groups", "region_groups", "genres", "genre_groups", "experience_required", "experience_preferred", "experience_excluded", "child_friendly", "age", "age_group", "age_intent", "venue", "rain_preferred", "entry_free", "paid_only", "max_entry_fee", "reservation_required", "time_slots", "time_after", "soft_terms", "keywords"):
         if key in {"age", "age_group", "age_intent", "reservation_required"}:
             current_missing = merged[key] is None
             previous_present = previous.get(key) is not None
@@ -1115,6 +1154,12 @@ def _matches_hard(event: Mapping[str, Any], filters: SearchFilters) -> bool:
             return False
         if filters.reservation_required is True and required != "必要":
             return False
+    if not experience_matcher.matches_experience(
+        event,
+        required=filters.experience_required,
+        excluded=filters.experience_excluded,
+    ):
+        return False
     return _matches_time(event, filters)
 
 
@@ -1156,18 +1201,25 @@ def _search_with_filters(
     reference_date: date,
     limit: int,
 ) -> tuple[list[dict[str, Any]], int, list[str]]:
-    matched: list[tuple[int, int, dict[str, Any]]] = []
+    matched: list[tuple[int, int, int, dict[str, Any]]] = []
     for source_index, event in enumerate(source_events):
         if not _matches_hard(event, filters):
             continue
         soft_score = _soft_score(event, filters)
         if filters.soft_terms and (soft_score <= 0 or not _matches_soft_terms(event, filters)):
             continue
-        matched.append((_ranking_score(event, filters, reference_date), source_index, event))
-    matched.sort(key=lambda item: (-item[0], _date_distance(item[2], reference_date), item[1]))
+        matched.append(
+            (
+                experience_matcher.preferred_match_count(event, filters.experience_preferred),
+                _ranking_score(event, filters, reference_date),
+                source_index,
+                event,
+            )
+        )
+    matched.sort(key=lambda item: (-item[0], -item[1], _date_distance(item[3], reference_date), item[2]))
     safe_limit = min(max(limit, 0), MAX_RESULT_SET_SIZE)
-    all_ids = [_event_id(event) for _, _, event in matched[:MAX_RESULT_SET_SIZE]]
-    return [event for _, _, event in matched[:safe_limit]], len(matched), all_ids
+    all_ids = [_event_id(event) for _, _, _, event in matched[:MAX_RESULT_SET_SIZE]]
+    return [event for _, _, _, event in matched[:safe_limit]], len(matched), all_ids
 
 
 def _copy_filters(filters: SearchFilters) -> SearchFilters:
@@ -1250,7 +1302,7 @@ def looks_like_event_query(query: str) -> bool:
     if age_semantics.query_age_semantics(normalized).recognized:
         return True
     filters = parse_query(query)
-    return bool(filters.dates or filters.city_groups or filters.region_groups or filters.genre_groups or filters.child_friendly or filters.age is not None or filters.age_group or filters.venue or filters.reservation_required is not None or filters.rain_preferred or filters.entry_free or filters.paid_only or filters.max_entry_fee is not None or filters.time_slots or filters.time_after is not None or filters.soft_terms or filters.requested_field or intent in {"count", "refine", "attribute"})
+    return bool(filters.dates or filters.city_groups or filters.region_groups or filters.genre_groups or filters.experience_required or filters.experience_preferred or filters.experience_excluded or filters.child_friendly or filters.age is not None or filters.age_group or filters.venue or filters.reservation_required is not None or filters.rain_preferred or filters.entry_free or filters.paid_only or filters.max_entry_fee is not None or filters.time_slots or filters.time_after is not None or filters.soft_terms or filters.requested_field or intent in {"count", "refine", "attribute"})
 
 
 def asks_for_nearby(query: str) -> bool:
@@ -1277,6 +1329,8 @@ def resolve_reference_index(query: str, result_count: int) -> int | None:
 
 def attribute_answer(event: Mapping[str, Any], requested_field: str) -> str:
     name = str(event["イベント名"])
+    if requested_field == "experience_profile":
+        return experience_matcher.describe_event_experience(event)
     answers = {
         "datetime": f"「{name}」は、{event['日時']}に開催予定です。",
         "place": f"「{name}」の場所は、{event['場所']}です。",
@@ -1321,21 +1375,37 @@ def search_events(
     filters = parse_query(normalized, reference_date)
     if inherit_previous or is_refinement_query(normalized):
         filters = merge_filters(filters, previous_filters)
+    if experience_preferences.has_release_phrase(normalized):
+        # An explicit release is a user instruction, not an omitted slot.
+        # It must clear experience constraints inherited from the previous
+        # result set before the refinement search is executed.
+        filters.experience_required = []
+        filters.experience_preferred = []
+        filters.experience_excluded = []
     filters.intent = intent if intent not in {"discover", "refine"} else filters.intent
     source_events = load_events() if events is None else list(events)
     if filters.invalid_date and not filters.dates:
         return SearchResult([], filters, "no_results", "その日付は確認できんかったよ。別の日付で探してみて。")
-    has_condition = bool(filters.dates or filters.city_groups or filters.region_groups or filters.genre_groups or filters.child_friendly or filters.age is not None or filters.age_group or filters.venue or filters.rain_preferred or filters.entry_free or filters.paid_only or filters.max_entry_fee is not None or filters.time_slots or filters.time_after is not None or filters.soft_terms)
+    has_condition = bool(filters.dates or filters.city_groups or filters.region_groups or filters.genre_groups or filters.experience_required or filters.experience_preferred or filters.experience_excluded or filters.child_friendly or filters.age is not None or filters.age_group or filters.venue or filters.rain_preferred or filters.entry_free or filters.paid_only or filters.max_entry_fee is not None or filters.time_slots or filters.time_after is not None or filters.soft_terms)
     if not has_condition:
         return SearchResult([], filters, "needs_condition", "いつ頃・どの地域のイベントを探しよる？ 「今日」「今週末」のように教えてみて。")
     selected, total, all_event_ids = _search_with_filters(
         source_events, filters, reference_date, limit
     )
     if selected:
+        message = None
+        if filters.experience_required or filters.experience_preferred or filters.experience_excluded:
+            message = experience_preferences.render_result_message(
+                total,
+                required=filters.experience_required,
+                preferred=filters.experience_preferred,
+                excluded=filters.experience_excluded,
+            )
         return SearchResult(
             selected,
             filters,
             "search",
+            message,
             total_matches=total,
             confidence=_confidence(selected, filters),
             all_event_ids=all_event_ids,
@@ -1343,7 +1413,18 @@ def search_events(
     near_matches, relaxed_condition, all_near_event_ids = _relaxation_candidates(
         source_events, filters, reference_date, limit
     )
-    message = f"ぴったりの条件では見つからんかったよ。「{relaxed_condition}」を外すと候補があるけん、見てみる？" if near_matches and relaxed_condition else "その条件にぴったり合うイベントは見つからんかったよ。条件を少し変えて探してみる？"
+    if filters.experience_required or filters.experience_excluded:
+        message = experience_preferences.render_result_message(
+            0,
+            required=filters.experience_required,
+            preferred=filters.experience_preferred,
+            excluded=filters.experience_excluded,
+        ) + " 条件を広げる場合は、立ったり歩いたりするイベントを含めてよいか教えてね。"
+        near_matches = []
+        relaxed_condition = None
+        all_near_event_ids = []
+    else:
+        message = f"ぴったりの条件では見つからんかったよ。「{relaxed_condition}」を外すと候補があるけん、見てみる？" if near_matches and relaxed_condition else "その条件にぴったり合うイベントは見つからんかったよ。条件を少し変えて探してみる？"
     return SearchResult(
         [],
         filters,

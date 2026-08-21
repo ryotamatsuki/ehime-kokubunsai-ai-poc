@@ -37,7 +37,11 @@ MAX_SLOT_ITEMS = 32
 MAX_TOPIC_ITEMS = 8
 MAX_TOPIC_LENGTH = 64
 LIST_SLOT_NAMES = frozenset(
-    {"dates", "municipalities", "regions", "genres", "topics", "time_slots", "detail_fields"}
+    {
+        "dates", "municipalities", "regions", "genres", "topics",
+        "experience_required", "experience_preferred", "experience_excluded",
+        "time_slots", "detail_fields",
+    }
 )
 BOOLEAN_SLOT_NAMES = frozenset(BOOLEAN_SLOT_FIELDS)
 
@@ -215,6 +219,9 @@ def build_command_system_prompt(output_format: str = DEFAULT_COMMAND_FORMAT) -> 
         "regions": "東予・中予・南予の配列。",
         "genres": "登録済みジャンル名の配列。",
         "topics": "イベント内容の実質的テーマだけ。会話表現は入れない。",
+        "experience_required": "必ず満たしてほしいExperience Vocabularyのconcept ID配列。seated / low_mobility / watch_listen / hands_on / walk_explore / audience_participationだけ。",
+        "experience_preferred": "できれば満たしてほしいExperience Vocabularyのconcept ID配列。同じ6つのconcept IDだけ。",
+        "experience_excluded": "含めないExperience Vocabularyのconcept ID配列。同じ6つのconcept IDだけ。",
         "audience": "family / preschool / elementary / junior_high / high_school / adult。",
         "age": "明示年齢（0〜120）。",
         "age_group": "preschool / elementary / junior_high / high_school / adult。",

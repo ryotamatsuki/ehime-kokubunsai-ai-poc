@@ -20,6 +20,7 @@ import agent_orchestrator
 import event_search
 import event_details
 import event_recommendation
+import experience_preferences
 import recommendation_pending
 from agent_planner import ModalConfig
 from conversation_router import route_conversation
@@ -35,6 +36,7 @@ from command_models import (
     ALLOWED_AGE_GROUPS,
     ALLOWED_AUDIENCES,
     ALLOWED_DETAIL_FIELDS,
+    ALLOWED_EXPERIENCE_CONCEPTS,
     ALLOWED_REFERENCE_KINDS,
     ALLOWED_TIME_SLOTS,
     ALLOWED_VENUES,
@@ -153,6 +155,9 @@ _COMMAND_LIST_SLOTS = frozenset(
         "regions",
         "genres",
         "topics",
+        "experience_required",
+        "experience_preferred",
+        "experience_excluded",
         "time_slots",
         "detail_fields",
     }
@@ -531,6 +536,15 @@ def _normalize_command_slots(value: Any) -> dict[str, Any] | None:
                     return None
             elif key == "detail_fields":
                 if not all(entry in _COMMAND_DETAIL_FIELDS for entry in values):
+                    return None
+            elif key in {
+                "experience_required",
+                "experience_preferred",
+                "experience_excluded",
+            }:
+                if not all(entry in ALLOWED_EXPERIENCE_CONCEPTS for entry in values):
+                    return None
+                if len(set(values)) != len(values):
                     return None
             else:
                 values = list(dict.fromkeys(values))
@@ -1461,6 +1475,7 @@ def _render_command_outcome(
     events = list(outcome.events)
     near_events = list(outcome.near_events)
     selected_event: dict[str, Any] | None = events[0] if len(events) == 1 else None
+    parsed_experience = event_search.parse_query(prompt)
 
     if outcome.flow == "event_detail":
         answer, selected_event = _command_detail_answer(
@@ -1497,7 +1512,25 @@ def _render_command_outcome(
             pending_state=None,
         )
 
-    if outcome.flow == "unsupported":
+    if parsed_experience.experience_required or parsed_experience.experience_preferred or parsed_experience.experience_excluded:
+        total = outcome.total_matches if outcome.total_matches is not None else len(events)
+        if events:
+            answer = experience_preferences.render_result_message(
+                total,
+                required=parsed_experience.experience_required,
+                preferred=parsed_experience.experience_preferred,
+                excluded=parsed_experience.experience_excluded,
+            )
+        else:
+            answer = experience_preferences.render_result_message(
+                0,
+                required=parsed_experience.experience_required,
+                preferred=parsed_experience.experience_preferred,
+                excluded=parsed_experience.experience_excluded,
+            )
+            if parsed_experience.experience_required or parsed_experience.experience_excluded:
+                answer += " 条件を広げる場合は、立ったり歩いたりするイベントを含めてよいか教えてね。"
+    elif outcome.flow == "unsupported":
         # Security/out-of-scope guards are deterministic messages from the
         # command executor.  Keep them when present; never ask the Writer to
         # invent a rationale for an unsupported request.

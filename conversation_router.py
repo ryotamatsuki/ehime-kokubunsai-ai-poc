@@ -79,6 +79,11 @@ def is_detail_followup_without_new_search(
     if not detail_field or contains_named_event_context(query):
         return False
     normalized = event_search.normalize_query(query)
+    # ``このイベント``/``そのイベント`` names the current selection rather
+    # than requesting a fresh event search.  Remove that reference before the
+    # generic search-word check so experience questions follow the same local
+    # detail path as fee and reservation questions.
+    normalized = normalized.replace("このイベント", "").replace("そのイベント", "")
     explicit_search_terms = (
         "イベント",
         "探し",

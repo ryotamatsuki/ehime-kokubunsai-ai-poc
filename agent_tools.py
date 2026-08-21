@@ -14,6 +14,7 @@ from typing import Any, Iterable, Mapping, Sequence
 import age_semantics
 import event_recommendation
 import event_search
+import experience_matcher
 import faq_search
 from agent_models import SearchSpec, ToolResult
 from app_config import (
@@ -240,6 +241,12 @@ def _matches_event(event: Mapping[str, Any], filters: Mapping[str, Any]) -> bool
         return False
     if not _matches_time(event, filters):
         return False
+    if not experience_matcher.matches_experience(
+        event,
+        required=_as_strings(filters.get("experience_required")),
+        excluded=_as_strings(filters.get("experience_excluded")),
+    ):
+        return False
     return _matches_soft_terms(event, filters)
 
 
@@ -310,8 +317,22 @@ def execute_structured_search(
     reference_date: date = POC_REFERENCE_DATE,
 ) -> ToolResult:
     source_events = list(event_search.load_events() if events is None else events)
-    matched = [event for event in source_events if _matches_event(event, spec.filters)]
-    matched.sort(key=lambda event: (-_ranking_score(event, spec.filters, reference_date)[0], _ranking_score(event, spec.filters, reference_date)[1], source_events.index(event)))
+    indexed_matches = [
+        (source_index, event)
+        for source_index, event in enumerate(source_events)
+        if _matches_event(event, spec.filters)
+    ]
+    indexed_matches.sort(
+        key=lambda item: (
+            -experience_matcher.preferred_match_count(
+                item[1], _as_strings(spec.filters.get("experience_preferred"))
+            ),
+            -_ranking_score(item[1], spec.filters, reference_date)[0],
+            _ranking_score(item[1], spec.filters, reference_date)[1],
+            item[0],
+        )
+    )
+    matched = [event for _, event in indexed_matches]
     strong_event_ids, reference_event_ids = _age_match_ids(matched, spec.filters)
     return ToolResult(
         search_id=spec.search_id,

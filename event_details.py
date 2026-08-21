@@ -13,6 +13,7 @@ import re
 from typing import Any, Mapping
 
 from app_config import REGION_CITIES
+import experience_matcher
 
 
 V2_FIELDS = frozenset(
@@ -47,6 +48,7 @@ DETAIL_FIELDS = (
     "sign_language",
     "contact",
     "fee_detail",
+    "experience_profile",
 )
 
 
@@ -238,6 +240,24 @@ def _missing_value(value: Any) -> str | None:
 def detect_detail_field(query: str) -> str | None:
     """Map participation questions to a structured field."""
 
+    experience_question = any(marker in query for marker in ("?", "？", "ですか", "ますか", "でしょうか"))
+    if experience_question and any(
+        term in query
+        for term in (
+            "座って",
+            "座れる",
+            "着席",
+            "立ちっぱなし",
+            "歩く",
+            "歩きます",
+            "移動",
+            "体験型",
+            "体験できる",
+            "ワークショップ",
+            "参加型",
+        )
+    ):
+        return "experience_profile"
     if any(term in query for term in ("絵付け", "体験も無料", "入場無料", "無料で入", "追加料金", "料金構造", "料金", "いくら")):
         return "fee_detail"
     if any(term in query for term in ("申込期限", "申し込み期限", "いつまでに申し込", "締切", "締め切り")):
@@ -299,6 +319,8 @@ def _fee_answer(event: Mapping[str, Any], query: str) -> str:
 
 def answer_event_detail(event: Mapping[str, Any], field: str, query: str = "") -> str:
     name = str(event["イベント名"])
+    if field == "experience_profile":
+        return experience_matcher.describe_event_experience(event, query)
     if not V2_FIELDS.issubset(event):
         return f"「{name}」の参加案内の詳細は、現在のデータに登録されていません。"
     guide = event["参加案内"]
