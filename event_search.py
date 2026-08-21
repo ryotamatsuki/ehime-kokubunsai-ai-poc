@@ -716,7 +716,10 @@ def _requested_field(query: str) -> str | None:
         return "genre"
     if re.search(r"子ども向け|子供向け|対象", normalized):
         return "child_friendly"
-    if re.search(r"屋内外|屋内ですか|屋外ですか|室内ですか|会場", normalized):
+    if re.search(
+        r"屋内外|屋内ですか|屋外ですか|室内ですか|(?:屋内|屋外|室内)(?:ですか)?\?|会場",
+        normalized,
+    ):
         return "venue"
     if re.search(r"概要|どんな|内容", normalized):
         return "overview"
