@@ -27,7 +27,7 @@ from app_config import (
     GENRE_ALIASES,
     INDOOR_TERMS,
     INJECTION_PATTERNS,
-    MAX_SEARCH_RESULTS,
+    MAX_RESULT_SET_SIZE,
     NEAR_TERMS,
     OUTDOOR_TERMS,
     OUT_OF_SCOPE_PATTERNS,
@@ -158,6 +158,12 @@ class SearchResult:
     confidence: str = "none"
     near_matches: list[dict[str, Any]] = field(default_factory=list)
     relaxed_condition: str | None = None
+    # Ordered IDs for the complete bounded result set.  ``events`` and
+    # ``near_matches`` are also full (up to MAX_RESULT_SET_SIZE), but keeping
+    # the IDs explicit lets callers resolve ordinal references without
+    # coupling that contract to card pagination.
+    all_event_ids: list[str] = field(default_factory=list)
+    all_near_event_ids: list[str] = field(default_factory=list)
 
 
 def normalize_query(value: str) -> str:
@@ -1141,7 +1147,12 @@ def _ranking_score(event: Mapping[str, Any], filters: SearchFilters, reference_d
     return score + max(0, 12 - min(_date_distance(event, reference_date), 12))
 
 
-def _search_with_filters(source_events: list[dict[str, Any]], filters: SearchFilters, reference_date: date, limit: int) -> tuple[list[dict[str, Any]], int]:
+def _search_with_filters(
+    source_events: list[dict[str, Any]],
+    filters: SearchFilters,
+    reference_date: date,
+    limit: int,
+) -> tuple[list[dict[str, Any]], int, list[str]]:
     matched: list[tuple[int, int, dict[str, Any]]] = []
     for source_index, event in enumerate(source_events):
         if not _matches_hard(event, filters):
@@ -1151,15 +1162,21 @@ def _search_with_filters(source_events: list[dict[str, Any]], filters: SearchFil
             continue
         matched.append((_ranking_score(event, filters, reference_date), source_index, event))
     matched.sort(key=lambda item: (-item[0], _date_distance(item[2], reference_date), item[1]))
-    safe_limit = min(max(limit, 0), MAX_SEARCH_RESULTS)
-    return [event for _, _, event in matched[:safe_limit]], len(matched)
+    safe_limit = min(max(limit, 0), MAX_RESULT_SET_SIZE)
+    all_ids = [_event_id(event) for _, _, event in matched[:MAX_RESULT_SET_SIZE]]
+    return [event for _, _, event in matched[:safe_limit]], len(matched), all_ids
 
 
 def _copy_filters(filters: SearchFilters) -> SearchFilters:
     return SearchFilters(**filters.to_dict())
 
 
-def _relaxation_candidates(source_events: list[dict[str, Any]], filters: SearchFilters, reference_date: date, limit: int) -> tuple[list[dict[str, Any]], str | None]:
+def _relaxation_candidates(
+    source_events: list[dict[str, Any]],
+    filters: SearchFilters,
+    reference_date: date,
+    limit: int,
+) -> tuple[list[dict[str, Any]], str | None, list[str]]:
     relaxable: list[tuple[str, str]] = []
     if filters.genre_groups or filters.genres:
         relaxable.append(("genre_groups", "ジャンル"))
@@ -1193,10 +1210,10 @@ def _relaxation_candidates(source_events: list[dict[str, Any]], filters: SearchF
             relaxed.paid_only = False
         else:
             setattr(relaxed, field_name, None)
-        candidates, _ = _search_with_filters(source_events, relaxed, reference_date, limit)
+        candidates, _, all_ids = _search_with_filters(source_events, relaxed, reference_date, limit)
         if candidates:
-            return candidates, label
-    return [], None
+            return candidates, label, all_ids
+    return [], None, []
 
 
 def classify_intent(query: str, *, _parsed_hint: bool = False, parsed_values: tuple[list[str], str | None] | None = None) -> str:
@@ -1277,7 +1294,15 @@ def _confidence(events: list[dict[str, Any]], filters: SearchFilters) -> str:
     return "high" if len(events) == 1 else "medium"
 
 
-def search_events(query: str, events: Iterable[dict[str, Any]] | None = None, reference_date: date = POC_REFERENCE_DATE, *, previous_filters: Mapping[str, Any] | None = None, inherit_previous: bool = False, limit: int = MAX_SEARCH_RESULTS) -> SearchResult:
+def search_events(
+    query: str,
+    events: Iterable[dict[str, Any]] | None = None,
+    reference_date: date = POC_REFERENCE_DATE,
+    *,
+    previous_filters: Mapping[str, Any] | None = None,
+    inherit_previous: bool = False,
+    limit: int = MAX_RESULT_SET_SIZE,
+) -> SearchResult:
     if not isinstance(query, str):
         raise TypeError("検索語は文字列で指定してください。")
     normalized = normalize_query(query)
@@ -1300,9 +1325,28 @@ def search_events(query: str, events: Iterable[dict[str, Any]] | None = None, re
     has_condition = bool(filters.dates or filters.city_groups or filters.region_groups or filters.genre_groups or filters.child_friendly or filters.age is not None or filters.age_group or filters.venue or filters.rain_preferred or filters.entry_free or filters.paid_only or filters.max_entry_fee is not None or filters.time_slots or filters.time_after is not None or filters.soft_terms)
     if not has_condition:
         return SearchResult([], filters, "needs_condition", "いつ頃・どの地域のイベントを探しよる？ 「今日」「今週末」のように教えてみて。")
-    selected, total = _search_with_filters(source_events, filters, reference_date, limit)
+    selected, total, all_event_ids = _search_with_filters(
+        source_events, filters, reference_date, limit
+    )
     if selected:
-        return SearchResult(selected, filters, "search", total_matches=total, confidence=_confidence(selected, filters))
-    near_matches, relaxed_condition = _relaxation_candidates(source_events, filters, reference_date, limit)
+        return SearchResult(
+            selected,
+            filters,
+            "search",
+            total_matches=total,
+            confidence=_confidence(selected, filters),
+            all_event_ids=all_event_ids,
+        )
+    near_matches, relaxed_condition, all_near_event_ids = _relaxation_candidates(
+        source_events, filters, reference_date, limit
+    )
     message = f"ぴったりの条件では見つからんかったよ。「{relaxed_condition}」を外すと候補があるけん、見てみる？" if near_matches and relaxed_condition else "その条件にぴったり合うイベントは見つからんかったよ。条件を少し変えて探してみる？"
-    return SearchResult([], filters, "no_results", message, near_matches=near_matches, relaxed_condition=relaxed_condition)
+    return SearchResult(
+        [],
+        filters,
+        "no_results",
+        message,
+        near_matches=near_matches,
+        relaxed_condition=relaxed_condition,
+        all_near_event_ids=all_near_event_ids,
+    )

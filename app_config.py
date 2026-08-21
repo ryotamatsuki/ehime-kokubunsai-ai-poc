@@ -13,8 +13,19 @@ from pathlib import Path
 
 POC_REFERENCE_DATE = date(2028, 11, 3)
 POC_REFERENCE_DATE_TEXT = "2028年11月3日"
-MAX_EVENT_CANDIDATES = 8
-MAX_SEARCH_RESULTS = MAX_EVENT_CANDIDATES
+# Result-set size and presentation budgets are intentionally separate.  The
+# search/command layers retain the complete bounded catalog result, while the
+# Streamlit view reveals it in pages and the optional Writer/Modal sees only a
+# small candidate set.
+RESULT_PAGE_SIZE = 8
+MAX_RESULT_SET_SIZE = 30
+MAX_WRITER_CANDIDATES = 8
+
+# Compatibility names retained for intermediate integrations.  New code
+# should use the explicit names above rather than treating one number as all
+# three concepts.
+MAX_EVENT_CANDIDATES = MAX_WRITER_CANDIDATES
+MAX_SEARCH_RESULTS = MAX_RESULT_SET_SIZE
 EVENT_DATA_PATH = Path(__file__).resolve().parent / "data" / "events.json"
 SEARCH_METADATA_PATH = Path(__file__).resolve().parent / "data" / "search_metadata.json"
 EVENT_SCHEMA_PATH = Path(__file__).resolve().parent / "data" / "events.schema.json"
@@ -78,7 +89,6 @@ REGION_ALIASES = {region: region for region in REGION_CITIES}
 # Compatibility names used by the deterministic search module.
 EVENTS_PATH = EVENT_DATA_PATH
 CITY_ALIASES = MUNICIPALITY_ALIASES
-MAX_SEARCH_RESULTS = MAX_EVENT_CANDIDATES
 
 
 # A genre label is an OR over its aliases.  Two different labels in a query

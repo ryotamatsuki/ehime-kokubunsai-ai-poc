@@ -16,7 +16,12 @@ import event_recommendation
 import event_search
 import faq_search
 from agent_models import SearchSpec, ToolResult
-from app_config import CITY_ALIASES, GENRE_ALIASES, MAX_SEARCH_RESULTS, POC_REFERENCE_DATE
+from app_config import (
+    CITY_ALIASES,
+    GENRE_ALIASES,
+    MAX_RESULT_SET_SIZE,
+    POC_REFERENCE_DATE,
+)
 
 
 TOOL_NAMES = frozenset(
@@ -312,8 +317,8 @@ def execute_structured_search(
         search_id=spec.search_id,
         purpose=spec.purpose,
         total_matches=len(matched),
-        events=[dict(event) for event in matched[:MAX_SEARCH_RESULTS]],
-        all_event_ids=[_event_id(event) for event in matched],
+        events=[dict(event) for event in matched[:MAX_RESULT_SET_SIZE]],
+        all_event_ids=[_event_id(event) for event in matched[:MAX_RESULT_SET_SIZE]],
         relaxed=spec.relaxed,
         relaxed_fields=spec.relaxed_fields,
         strong_event_ids=strong_event_ids,
@@ -335,8 +340,8 @@ def _result_for_events(spec: SearchSpec, events: Sequence[Mapping[str, Any]], me
         search_id=spec.search_id,
         purpose=spec.purpose,
         total_matches=len(copied),
-        events=copied[:MAX_SEARCH_RESULTS],
-        all_event_ids=[_event_id(event) for event in copied],
+        events=copied[:MAX_RESULT_SET_SIZE],
+        all_event_ids=[_event_id(event) for event in copied[:MAX_RESULT_SET_SIZE]],
         relaxed=spec.relaxed,
         relaxed_fields=spec.relaxed_fields,
         message=message,

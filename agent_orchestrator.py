@@ -26,7 +26,7 @@ from agent_planner import (
     validate_search_plan,
 )
 from agent_tools import execute_tool
-from app_config import MAX_SEARCH_RESULTS, POC_REFERENCE_DATE
+from app_config import MAX_RESULT_SET_SIZE, MAX_WRITER_CANDIDATES, POC_REFERENCE_DATE
 
 
 MAX_PLANNER_ROUNDS = 2
@@ -313,7 +313,9 @@ def merge_agent_results(results: Sequence[ToolResult]) -> MergedResults:
     return MergedResults(
         exact_events=exact,
         relaxed_events=relaxed,
-        display_candidates=(exact + relaxed)[:MAX_SEARCH_RESULTS],
+        # The Writer sees only a bounded candidate budget.  The complete
+        # ordered exact/relaxed sets remain available to the UI and state.
+        display_candidates=(exact + relaxed)[:MAX_WRITER_CANDIDATES],
     )
 
 
@@ -335,7 +337,7 @@ def summarize_tool_results(results: Sequence[ToolResult]) -> dict[str, Any]:
                 "search_id": result.search_id,
                 "purpose": result.purpose,
                 "total_matches": result.total_matches,
-                "event_ids": result.all_event_ids[:MAX_SEARCH_RESULTS],
+                "event_ids": result.all_event_ids[:MAX_RESULT_SET_SIZE],
                 "relaxed": result.relaxed,
                 "relaxed_fields": list(result.relaxed_fields),
                 "strong_event_ids": list(result.strong_event_ids),
@@ -354,9 +356,8 @@ def build_deterministic_facts(
 ) -> dict[str, Any]:
     exact_results = [result for result in tool_results if not result.relaxed]
     if len(exact_results) == 1:
-        # The ToolResult count is calculated before the eight-card display
-        # limit and is therefore the authoritative total for both count and
-        # list answers.
+        # The ToolResult count is calculated before the UI page size and is
+        # therefore authoritative for both count and list answers.
         total_matches = exact_results[0].total_matches
     elif exact_results:
         total_matches = len({event_id for result in exact_results for event_id in result.all_event_ids})
@@ -387,17 +388,18 @@ def build_writer_payload(
     deterministic_facts: Mapping[str, Any],
     candidate_events: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
+    bounded_candidates = list(candidate_events)[:MAX_WRITER_CANDIDATES]
     return {
         "query": query,
         "answer_type": deterministic_facts["answer_type"],
-        "candidate_ids": [_event_id(event) for event in candidate_events],
+        "candidate_ids": [_event_id(event) for event in bounded_candidates],
         "candidate_summary": [
             {
                 "id": _event_id(event),
                 "ジャンル": str(event.get("ジャンル", "")),
                 "概要": str(event.get("概要", ""))[:400],
             }
-            for event in candidate_events
+            for event in bounded_candidates
         ],
         "relaxed": bool(deterministic_facts["relaxed_event_ids"]),
     }
@@ -463,13 +465,15 @@ def execute_existing_fast_path(
         reference_date=reference_date,
         previous_filters=conversation_state.get("last_filters"),
         inherit_previous=False,
-        limit=MAX_SEARCH_RESULTS,
+        limit=MAX_RESULT_SET_SIZE,
     )
     return AgenticResponse(
         answer_type="count" if result.intent == "count" else "list",
         total_matches=result.total_matches,
         exact_events=list(result.events),
         relaxed_events=list(result.near_matches),
+        exact_event_ids=tuple(result.all_event_ids),
+        relaxed_event_ids=tuple(result.all_near_event_ids),
         lead=result.message or "条件に合う候補を見つけました。",
         relaxed_fields=(result.relaxed_condition,) if result.relaxed_condition else (),
         planner_used=False,
@@ -564,17 +568,22 @@ def handle_agentic_query(
         writer_ms = (perf_counter() - writer_started) * 1000
     if writer is None:
         writer = deterministic_writer_fallback(facts)
-    exact_events = _order_by_writer(merged.exact_events, writer.recommended_event_ids)
-    relaxed_events = _order_by_writer(merged.relaxed_events, writer.recommended_event_ids)
-    # The UI has one bounded result-card budget.  Exact matches have priority;
-    # relaxed references use only the remaining slots.
-    exact_events = exact_events[:MAX_SEARCH_RESULTS]
-    relaxed_events = relaxed_events[: max(0, MAX_SEARCH_RESULTS - len(exact_events))]
+    # Writer recommendations may explain a subset, but they must not change
+    # the deterministic search order used by cards, ordinals, or refinement.
+    exact_events = [dict(event) for event in merged.exact_events]
+    relaxed_events = [dict(event) for event in merged.relaxed_events]
+    # Keep the complete bounded result sets for the UI.  The Writer candidate
+    # budget is enforced at ``merge_agent_results``/``build_writer_payload``;
+    # it must not become a card or conversation-reference limit.
+    exact_events = exact_events[:MAX_RESULT_SET_SIZE]
+    relaxed_events = relaxed_events[:MAX_RESULT_SET_SIZE]
     return AgenticResponse(
         answer_type=str(facts["answer_type"]),
         total_matches=int(facts["total_matches"]),
         exact_events=exact_events,
         relaxed_events=relaxed_events,
+        exact_event_ids=tuple(str(value) for value in facts["exact_event_ids"]),
+        relaxed_event_ids=tuple(str(value) for value in facts["relaxed_event_ids"]),
         lead=writer.lead,
         follow_up=writer.follow_up,
         relaxed_fields=tuple(str(value) for value in facts["relaxed_fields"]),

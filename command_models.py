@@ -20,7 +20,7 @@ import re
 from typing import Any, Mapping
 
 import age_semantics
-from app_config import GENRE_ALIASES, REGION_CITIES
+from app_config import GENRE_ALIASES, MAX_RESULT_SET_SIZE, REGION_CITIES
 
 
 # The flow names are the only semantic actions the command generator may
@@ -57,9 +57,10 @@ CANONICAL_MUNICIPALITIES = frozenset(
     municipality for municipalities in REGION_CITIES.values() for municipality in municipalities
 )
 
-# The current UI/search result set is capped at eight candidates.  A
-# reference index is 1-based in the command contract ("2番目" -> 2).
-MAX_REFERENCE_INDEX = 8
+# Reference indexes address the complete bounded result set, not the number of
+# cards visible on the first UI page.  The index remains 1-based
+# ("2番目" -> 2).
+MAX_REFERENCE_INDEX = MAX_RESULT_SET_SIZE
 MAX_VISIT_COUNT = 2
 MAX_TEXT_LENGTH = 240
 MAX_SHORT_TEXT_LENGTH = 64

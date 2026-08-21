@@ -25,9 +25,11 @@ from agent_planner import ModalConfig
 from conversation_router import route_conversation
 from app_config import (
     REGION_CITIES,
-    MAX_EVENT_CANDIDATES,
+    MAX_RESULT_SET_SIZE,
+    MAX_WRITER_CANDIDATES,
     POC_REFERENCE_DATE,
     POC_REFERENCE_DATE_TEXT,
+    RESULT_PAGE_SIZE,
 )
 from command_models import (
     ALLOWED_AGE_GROUPS,
@@ -44,6 +46,7 @@ from command_models import (
 )
 from flow_registry import FLOW_REGISTRY
 from event_image_assets import event_image_path
+from result_pagination import next_visible_count, normalize_visible_count, visible_items
 from iyoshirube_ui import (
     EMOTION_NORMAL,
     EMOTION_THINKING,
@@ -99,6 +102,8 @@ class _CommandOutcome:
     command: dict[str, Any]
     events: list[dict[str, Any]]
     near_events: list[dict[str, Any]]
+    all_event_ids: list[str]
+    all_near_event_ids: list[str]
     pairs: list[tuple[dict[str, Any], dict[str, Any]]]
     total_matches: int | None = None
     filters: dict[str, Any] | None = None
@@ -693,7 +698,9 @@ def _command_state(
     state: dict[str, Any] = {
         "reference_date": POC_REFERENCE_DATE.isoformat(),
         "selected_event_id": str(selected_event.get("id") or "") or None,
-        "last_result_ids": [str(event.get("id")) for event in previous_results],
+        "last_result_ids": list(
+            st.session_state.get("last_result_ids") or _event_ids(previous_results)
+        ),
         "last_command": pending_plan or st.session_state.get("last_command"),
         "active_flow": pending_command.get("flow") if pending_command else None,
         "pending_slots": dict(pending_plan.get("slots", {})) if pending_plan else {},
@@ -854,6 +861,40 @@ def _ground_event_list(value: Any, by_key: Mapping[str, dict[str, Any]]) -> list
     return grounded
 
 
+def _event_ids(events: Any) -> list[str]:
+    """Return stable, ordered, duplicate-free event IDs from grounded values."""
+
+    if not isinstance(events, (list, tuple)):
+        return []
+    ids: list[str] = []
+    seen: set[str] = set()
+    for event in events:
+        event_id = _event_key(event)
+        if event_id and event_id not in seen:
+            ids.append(event_id)
+            seen.add(event_id)
+    return ids
+
+
+def _ground_ordered_ids(
+    value: Any,
+    by_key: Mapping[str, dict[str, Any]],
+) -> list[str]:
+    return _event_ids(_ground_event_list(value, by_key))
+
+
+def _events_for_ids(ids: list[str]) -> list[dict[str, Any]]:
+    """Rehydrate cards from the local catalog in the supplied order."""
+
+    if not ids:
+        return []
+    try:
+        _, by_key = _event_catalog()
+    except (OSError, TypeError, ValueError):
+        return []
+    return _ground_event_list(ids, by_key)
+
+
 def _ground_pairs(value: Any, by_key: Mapping[str, dict[str, Any]]) -> list[tuple[dict[str, Any], dict[str, Any]]]:
     if value is None:
         return []
@@ -937,8 +978,52 @@ def _normalize_command_outcome(
         _, by_key = _event_catalog()
     except (OSError, ValueError, TypeError):
         return None
-    events = _ground_event_list(events_raw, by_key)
-    near_events = _ground_event_list(near_raw, by_key)
+    all_ids_raw = _value(
+        raw,
+        "all_event_ids",
+        "ordered_event_ids",
+        "result_ids",
+        default=None,
+    )
+    if all_ids_raw is None:
+        all_ids_raw = _value(
+            result_value,
+            "all_event_ids",
+            "ordered_event_ids",
+            "result_ids",
+            default=None,
+        )
+    all_near_ids_raw = _value(
+        raw,
+        "all_near_event_ids",
+        "ordered_near_event_ids",
+        "near_result_ids",
+        default=None,
+    )
+    if all_near_ids_raw is None:
+        all_near_ids_raw = _value(
+            result_value,
+            "all_near_event_ids",
+            "ordered_near_event_ids",
+            "near_result_ids",
+            default=None,
+        )
+    all_event_ids = _ground_ordered_ids(
+        all_ids_raw if all_ids_raw is not None else events_raw,
+        by_key,
+    )
+    all_near_event_ids = _ground_ordered_ids(
+        all_near_ids_raw if all_near_ids_raw is not None else near_raw,
+        by_key,
+    )
+    events = _ground_event_list(
+        all_ids_raw if all_ids_raw is not None else events_raw,
+        by_key,
+    )
+    near_events = _ground_event_list(
+        all_near_ids_raw if all_near_ids_raw is not None else near_raw,
+        by_key,
+    )
     pairs = _ground_pairs(pairs_raw, by_key)
     filters = _value(raw, "filters", "search_filters", default=None)
     filters = dict(filters) if isinstance(filters, Mapping) else None
@@ -958,7 +1043,11 @@ def _normalize_command_outcome(
     total_matches = _value(raw, "total_matches", "count", default=None)
     if total_matches is None:
         total_matches = _value(result_value, "total_matches", "count", default=None)
-    if isinstance(total_matches, bool) or not isinstance(total_matches, int) or not 0 <= total_matches <= 30:
+    if (
+        isinstance(total_matches, bool)
+        or not isinstance(total_matches, int)
+        or not 0 <= total_matches <= MAX_RESULT_SET_SIZE
+    ):
         total_matches = None
     pending_raw = _value(raw, "pending", "pending_state", default=None)
     missing_slots = _value(raw, "missing_slots", "required_slots", default=[])
@@ -1003,6 +1092,8 @@ def _normalize_command_outcome(
         command=normalized_command,
         events=events,
         near_events=near_events,
+        all_event_ids=all_event_ids,
+        all_near_event_ids=all_near_event_ids,
         pairs=pairs,
         total_matches=total_matches,
         filters=filters,
@@ -1027,14 +1118,14 @@ def _search_result(
         reference_date=POC_REFERENCE_DATE,
         previous_filters=previous_filters,
         inherit_previous=inherit_previous,
-        limit=MAX_EVENT_CANDIDATES,
+        limit=MAX_RESULT_SET_SIZE,
     )
 
 
 def _search_candidates(query: str) -> list[dict[str, object]]:
     """Backward-compatible helper for callers that only need exact cards."""
 
-    return list(_search_result(query).events[:MAX_EVENT_CANDIDATES])
+    return list(_search_result(query).events[:MAX_WRITER_CANDIDATES])
 
 
 def _quick_action_fallback(action: _QuickAction) -> _CommandOutcome:
@@ -1045,8 +1136,10 @@ def _quick_action_fallback(action: _QuickAction) -> _CommandOutcome:
         flow=action.command.flow,
         slots=dict(action.command.slots),
         command=action.command.to_dict(),
-        events=list(search_result.events[:MAX_EVENT_CANDIDATES]),
-        near_events=list(search_result.near_matches[:MAX_EVENT_CANDIDATES]),
+        events=list(search_result.events),
+        near_events=list(search_result.near_matches),
+        all_event_ids=list(search_result.all_event_ids),
+        all_near_event_ids=list(search_result.all_near_event_ids),
         pairs=[],
         total_matches=search_result.total_matches,
         filters=search_result.filters.to_dict(),
@@ -1192,6 +1285,8 @@ def _run_optional_pair_executor(
             command=dict(payload),
             events=[],
             near_events=[],
+            all_event_ids=[],
+            all_near_event_ids=[],
             pairs=[],
             total_matches=0,
             message="同日・時間順で組み合わせられる候補は見つかりませんでした。",
@@ -1361,8 +1456,8 @@ def _render_command_outcome(
             pending_state=None,
         )
 
-    events = list(outcome.events[:MAX_EVENT_CANDIDATES])
-    near_events = list(outcome.near_events[:MAX_EVENT_CANDIDATES])
+    events = list(outcome.events)
+    near_events = list(outcome.near_events)
     selected_event: dict[str, Any] | None = events[0] if len(events) == 1 else None
 
     if outcome.flow == "event_detail":
@@ -1421,7 +1516,10 @@ def _render_command_outcome(
         answer = "ジャンル・検索タグ・地域などが近い候補です。"
     else:
         total = outcome.total_matches if outcome.total_matches is not None else len(events)
-        answer = f"条件に合うイベントが{total}件見つかりました。下のカードを確認してみて。"
+        answer = (
+            f"条件に合うイベントが{total}件見つかりました。"
+            "下のカードを確認してみて。"
+        )
 
     # Writer is an optional subjective layer only.  It is never used for
     # dates, fees, places, counts, URLs, or participation facts.
@@ -1476,7 +1574,7 @@ def _llm_candidates(
     )
     return [
         {key: candidate[key] for key in safe_fields if key in candidate}
-        for candidate in candidates[:MAX_EVENT_CANDIDATES]
+        for candidate in candidates[:MAX_WRITER_CANDIDATES]
     ]
 
 
@@ -1766,10 +1864,24 @@ def _render_event_grid(
     start_index: int = 1,
     scope: str = "exact",
 ) -> None:
-    """Render grounded event cards in a responsive, at-most-three-column grid."""
+    """Render ordered cards in pages without re-running the search pipeline."""
 
-    for row_start in range(0, len(events), 3):
-        row_events = events[row_start : row_start + 3]
+    ordered_events = list(events)
+    state_key = f"{scope}_visible_count"
+    visible_count = normalize_visible_count(
+        len(ordered_events),
+        st.session_state.get(state_key),
+        page_size=RESULT_PAGE_SIZE,
+    )
+    st.session_state[state_key] = visible_count
+    visible_events = visible_items(
+        ordered_events,
+        visible_count,
+        page_size=RESULT_PAGE_SIZE,
+    )
+
+    for row_start in range(0, len(visible_events), 3):
+        row_events = visible_events[row_start : row_start + 3]
         columns = st.columns(3 if len(row_events) == 3 else len(row_events))
         for column, event_offset in zip(columns, range(len(row_events))):
             with column:
@@ -1778,6 +1890,25 @@ def _render_event_grid(
                     start_index + row_start + event_offset,
                     scope=scope,
                 )
+
+    shown = len(visible_events)
+    total = len(ordered_events)
+    if total > 0:
+        st.caption(f"{total}件中{shown}件を表示")
+    if shown < total:
+        remaining = total - shown
+        next_page = min(RESULT_PAGE_SIZE, remaining)
+        if st.button(
+            f"さらに{next_page}件表示（残り{remaining}件）",
+            key=f"load_more_{scope}",
+            use_container_width=True,
+        ):
+            st.session_state[state_key] = next_visible_count(
+                total,
+                visible_count,
+                page_size=RESULT_PAGE_SIZE,
+            )
+            st.rerun()
 
 
 def _render_avatar_image(emotion: str, *, width: int) -> None:
@@ -1867,6 +1998,10 @@ def _reset() -> None:
         "messages",
         "last_results",
         "last_near_results",
+        "last_result_ids",
+        "last_near_result_ids",
+        "exact_visible_count",
+        "near_visible_count",
         "last_relaxed_condition",
         "last_filters",
         "selected_event",
@@ -1926,6 +2061,14 @@ if "last_results" not in st.session_state:
     st.session_state.last_results = []
 if "last_near_results" not in st.session_state:
     st.session_state.last_near_results = []
+if "last_result_ids" not in st.session_state:
+    st.session_state.last_result_ids = []
+if "last_near_result_ids" not in st.session_state:
+    st.session_state.last_near_result_ids = []
+if "exact_visible_count" not in st.session_state:
+    st.session_state.exact_visible_count = 0
+if "near_visible_count" not in st.session_state:
+    st.session_state.near_visible_count = 0
 if "last_relaxed_condition" not in st.session_state:
     st.session_state.last_relaxed_condition = None
 if "last_filters" not in st.session_state:
@@ -2255,7 +2398,11 @@ if prompt:
             )
             command_pending_to_store = command_render.pending_state
             if command_outcome.flow == "find_events":
-                exact_result_count = len(command_outcome.events)
+                exact_result_count = (
+                    command_outcome.total_matches
+                    if command_outcome.total_matches is not None
+                    else len(command_outcome.events)
+                )
             if command_outcome.flow in {"recommend_next", "recommend_similar"}:
                 recommendation_result_count = len(command_outcome.events)
             if command_outcome.flow in {
@@ -2280,7 +2427,9 @@ if prompt:
             "selected_event_id": (
                 st.session_state.get("selected_event", {}) or {}
             ).get("id"),
-            "last_result_ids": [str(event.get("id")) for event in previous_results],
+            "last_result_ids": list(
+                st.session_state.get("last_result_ids") or _event_ids(previous_results)
+            ),
             "last_filters": st.session_state.get("last_filters") or {},
             "last_results": previous_results,
             "selected_event": st.session_state.get("selected_event"),
@@ -2293,7 +2442,7 @@ if prompt:
         )
         answer = agent_orchestrator.render_agentic_response(agentic_response)
         results = list(agentic_response.exact_events)
-        exact_result_count = len(agentic_response.exact_events)
+        exact_result_count = agentic_response.total_matches
         near_results = list(agentic_response.relaxed_events)
         relaxed_condition = "・".join(
             agent_orchestrator.humanize_relaxed_fields(agentic_response.relaxed_fields)
@@ -2443,7 +2592,7 @@ if prompt:
         answer = NEARBY_MESSAGE
     elif route.action_type == "scope_search":
         search_result = _search_result(prompt)
-        exact_result_count = len(search_result.events)
+        exact_result_count = search_result.total_matches
         answer = search_result.message or GENERIC_SCOPE_MESSAGE
     elif route.action_type == "general_faq":
         answer = route.faq_match.answer if route.faq_match is not None else GENERIC_SCOPE_MESSAGE
@@ -2461,9 +2610,9 @@ if prompt:
         )
         filters = search_result.filters
         invalid_input = invalid_input or bool(filters.invalid_date)
-        exact_result_count = len(search_result.events)
-        results = list(search_result.events[:MAX_EVENT_CANDIDATES])
-        near_results = list(search_result.near_matches[:MAX_EVENT_CANDIDATES])
+        exact_result_count = search_result.total_matches
+        results = list(search_result.events)
+        near_results = list(search_result.near_matches)
         relaxed_condition = search_result.relaxed_condition
         if not results:
             answer = search_result.message or NO_RESULT_MESSAGE
@@ -2560,8 +2709,55 @@ if prompt:
             "emotion": assistant_emotion,
         }
     )
+    previous_result_ids = list(st.session_state.get("last_result_ids", []))
+    previous_near_result_ids = list(st.session_state.get("last_near_result_ids", []))
+    result_ids = _event_ids(results)
+    near_result_ids = _event_ids(near_results)
+    if command_outcome is not None and command_outcome.all_event_ids:
+        result_ids = list(command_outcome.all_event_ids)
+    elif agentic_response is not None and agentic_response.exact_event_ids:
+        result_ids = list(agentic_response.exact_event_ids)
+    elif search_result is not None and search_result.all_event_ids:
+        result_ids = list(search_result.all_event_ids)
+    if command_outcome is not None and command_outcome.all_near_event_ids:
+        near_result_ids = list(command_outcome.all_near_event_ids)
+    elif agentic_response is not None and agentic_response.relaxed_event_ids:
+        near_result_ids = list(agentic_response.relaxed_event_ids)
+    elif search_result is not None and search_result.all_near_event_ids:
+        near_result_ids = list(search_result.all_near_event_ids)
+
+    # If an adapter returned only IDs, rehydrate the complete ordered set from
+    # the local catalog before persisting it.  This keeps card facts local and
+    # makes the session's result IDs the single source for pagination and
+    # conversation references.
+    if len(result_ids) > len(_event_ids(results)):
+        results = _events_for_ids(result_ids)
+    if len(near_result_ids) > len(_event_ids(near_results)):
+        near_results = _events_for_ids(near_result_ids)
+
+    replace_result_set = bool(
+        search_result is not None
+        or agentic_response is not None
+        or (
+            command_outcome is not None
+            and command_outcome.flow
+            in {
+                "find_events",
+                "count_events",
+                "event_detail",
+                "recommend_next",
+                "recommend_similar",
+            }
+        )
+    )
+    if replace_result_set or result_ids != previous_result_ids:
+        st.session_state.exact_visible_count = min(RESULT_PAGE_SIZE, len(result_ids))
+    if replace_result_set or near_result_ids != previous_near_result_ids:
+        st.session_state.near_visible_count = min(RESULT_PAGE_SIZE, len(near_result_ids))
     st.session_state.last_results = results
     st.session_state.last_near_results = near_results
+    st.session_state.last_result_ids = result_ids
+    st.session_state.last_near_result_ids = near_result_ids
     st.session_state.last_relaxed_condition = relaxed_condition
     if command_handled and command_render is not None:
         command_filters = command_render.filters
