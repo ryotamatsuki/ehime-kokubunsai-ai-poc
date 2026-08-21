@@ -19,6 +19,7 @@ if str(ROOT) not in sys.path:
 from command_generator import generate_command, parse_and_validate_command
 from command_models import CommandPlan, CommandSlots, CommandValidationError
 from command_orchestrator import CommandOrchestrator
+import conversation_recovery
 import event_recommendation
 from flow_registry import FLOW_NAMES, FLOW_REGISTRY, validate_flow_registry
 
@@ -241,6 +242,52 @@ def qa_pending_fast_path() -> None:
     _assert(time_result.latency.generator_calls == 0 and not calls, "pending time used LLM")
 
 
+def qa_recovery_semantic_flows() -> None:
+    """Recovery is a normal Semantic Command flow, not a second router."""
+
+    calls: list[dict] = []
+
+    def semantic_recovery(payload):
+        calls.append(dict(payload))
+        query = str(payload.get("query", ""))
+        if "2番目" in query:
+            return {
+                "flow": "explain_result",
+                "slots": {"reference_kind": "ordinal", "reference_index": 2},
+                "confidence": "high",
+            }
+        return {"flow": "explain_search", "slots": {}, "confidence": "high"}
+
+    recovery_events = CommandOrchestrator(None, reference_date=REFERENCE_DATE).adapters.events[:3]
+    recovery_context = conversation_recovery.build_search_context(
+        "直前の検索",
+        {},
+        recovery_events,
+        result_ids=[event["id"] for event in recovery_events],
+        total_matches=len(recovery_events),
+    )
+    state = {
+        "has_last_search_context": True,
+        "last_result_ids": ["001", "002", "003"],
+        "last_result_count": 3,
+        "last_action": "find_events",
+        "last_search_context": recovery_context.to_dict(),
+    }
+    orchestrator = CommandOrchestrator(semantic_recovery, reference_date=REFERENCE_DATE)
+    search_explanation = orchestrator.handle_query("何を材料にこの候補を出したの？", state)
+    _assert(search_explanation.flow == "explain_search", "semantic recovery missed explain_search")
+    _assert(search_explanation.status == "ok", "explain_search did not execute")
+    _assert(search_explanation.latency.generator_calls == 1, "recovery used more than one generator call")
+    result_explanation = orchestrator.handle_query("2番目はどうして入った？", state)
+    _assert(result_explanation.flow == "explain_result", "semantic recovery missed explain_result")
+    _assert(result_explanation.events and result_explanation.events[0]["id"] == "002", "ordinal was not grounded")
+    _assert(len(calls) == 2, "recovery added a second semantic generation call")
+
+    missing = orchestrator.handle_query("何を材料にこの候補を出したの？")
+    _assert(missing.status == "clarification", "missing recovery context was not clarified")
+    _assert("直前の検索結果" in missing.message, "missing context message was not grounded")
+
+
 def qa_pair_intent_guard_and_state() -> None:
     positive = [
         "松山で2つのイベントを回りたい",
@@ -411,6 +458,7 @@ def main() -> None:
     qa_generator_bound()
     qa_deterministic_execution()
     qa_pending_fast_path()
+    qa_recovery_semantic_flows()
     qa_pair_intent_guard_and_state()
     qa_generated_dates_are_grounded()
     print(f"Command semantic fixture: DEV {dev} PASS; HOLDOUT {holdout} PASS")
