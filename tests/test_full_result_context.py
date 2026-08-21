@@ -265,17 +265,12 @@ def test_preserving_recommendation_confirmation_keeps_the_current_page() -> None
 
 
 def test_command_confirmation_with_unchanged_results_is_classified_as_preserving() -> None:
-    ids = [f"{index:03d}" for index in range(1, 29)]
     assert (
         classify_result_context_source(
             command_flow="recommend_next",
             search_result_present=False,
             agentic_response_present=False,
-            command_handled=True,
-            pending_handled=False,
-            flow="recommend_next",
-            previous_result_ids=ids,
-            result_ids=ids,
+            command_pending_response=True,
         )
         == "preserving"
     )
@@ -284,13 +279,32 @@ def test_command_confirmation_with_unchanged_results_is_classified_as_preserving
             command_flow="find_events",
             search_result_present=False,
             agentic_response_present=False,
-            command_handled=True,
-            pending_handled=False,
-            flow="find_events",
-            previous_result_ids=ids,
-            result_ids=ids,
         )
         == "command"
+    )
+
+
+def test_real_recommendation_is_not_preserving_even_if_ids_are_unchanged() -> None:
+    assert (
+        classify_result_context_source(
+            command_flow="recommend_next",
+            search_result_present=False,
+            agentic_response_present=False,
+            command_pending_response=False,
+        )
+        == "command"
+    )
+
+
+def test_pending_recommendation_error_is_preserving_without_id_heuristics() -> None:
+    assert (
+        classify_result_context_source(
+            command_flow=None,
+            search_result_present=False,
+            agentic_response_present=False,
+            pending_response_preserving=True,
+        )
+        == "preserving"
     )
 
 
@@ -300,11 +314,7 @@ def test_state_boundary_keeps_16_cards_for_confirmation_then_resets_new_search()
         command_flow="recommend_next",
         search_result_present=False,
         agentic_response_present=False,
-        command_handled=True,
-        pending_handled=False,
-        flow="recommend_next",
-        previous_result_ids=old_ids,
-        result_ids=old_ids,
+        command_pending_response=True,
     )
     after_confirmation = transition_result_context(
         previous_results=_records(old_ids),
@@ -325,11 +335,7 @@ def test_state_boundary_keeps_16_cards_for_confirmation_then_resets_new_search()
         command_flow="find_events",
         search_result_present=False,
         agentic_response_present=False,
-        command_handled=True,
-        pending_handled=False,
-        flow="find_events",
-        previous_result_ids=after_confirmation.result_ids,
-        result_ids=new_ids,
+        command_pending_response=False,
     )
     after_new_search = transition_result_context(
         previous_results=after_confirmation.results,

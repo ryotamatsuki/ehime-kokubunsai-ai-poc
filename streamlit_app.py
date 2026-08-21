@@ -2228,6 +2228,7 @@ if prompt:
     detail_field = route.detail_field
     pending_decision = recommendation_pending.PendingDecision(False)
     pending_handled = False
+    pending_result_set_replaced = False
     pending_state_to_store: dict[str, str] | None = None
     pending_state = st.session_state.get("pending_recommendation")
     if pending_state:
@@ -2494,6 +2495,7 @@ if prompt:
                 answer = recommendation.message
                 recommendation_result_count = len(recommendation.events)
                 results = list(recommendation.events) or previous_results
+                pending_result_set_replaced = bool(recommendation.events)
         else:
             answer = "推薦条件を確認できませんでした。イベント名からもう一度探してみて。"
     elif agentic_response is not None:
@@ -2750,11 +2752,12 @@ if prompt:
         command_flow=command_outcome.flow if command_outcome is not None else None,
         search_result_present=search_result is not None,
         agentic_response_present=agentic_response is not None,
-        command_handled=command_handled,
-        pending_handled=pending_handled,
-        flow=turn_flow,
-        previous_result_ids=previous_result_ids,
-        result_ids=result_ids,
+        command_pending_response=bool(
+            command_render is not None and command_render.pending_state is not None
+        ),
+        pending_response_preserving=(
+            pending_handled and not pending_result_set_replaced
+        ),
     )
     context_flow = turn_flow if command_outcome is None else command_outcome.flow
 
