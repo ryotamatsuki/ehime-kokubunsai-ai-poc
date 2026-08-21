@@ -545,6 +545,16 @@ def execute_existing_fast_path(
         lead=result.message or "条件に合う候補を見つけました。",
         relaxed_fields=(result.relaxed_condition,) if result.relaxed_condition else (),
         planner_used=False,
+        search_specs=(
+            {
+                "search_id": "fast_path",
+                "tool": "search_events",
+                "purpose": "deterministic fast path",
+                "filters": result.filters.to_dict(),
+                "relaxed": bool(result.relaxed_condition),
+                "relaxed_fields": [result.relaxed_condition] if result.relaxed_condition else [],
+            },
+        ),
     )
 
 
@@ -586,6 +596,7 @@ def handle_agentic_query(
     planner_ms = (perf_counter() - planner_started) * 1000
 
     all_results: list[ToolResult] = []
+    executed_search_specs: list[dict[str, Any]] = []
     total_search_count = 0
     planner_rounds = 0
     replan_ms = 0.0
@@ -602,6 +613,7 @@ def handle_agentic_query(
             except (ValueError, TypeError, KeyError):
                 continue
             all_results.append(result)
+            executed_search_specs.append(search_spec.to_dict())
             total_search_count += 1
         if not should_replan(current_plan, all_results, planner_round):
             break
@@ -676,4 +688,5 @@ def handle_agentic_query(
         writer_skipped=writer_skipped,
         strong_event_ids=tuple(str(value) for value in facts["strong_event_ids"]),
         reference_event_ids=tuple(str(value) for value in facts["reference_event_ids"]),
+        search_specs=tuple(executed_search_specs),
     )

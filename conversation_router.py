@@ -193,6 +193,15 @@ def route_conversation(
     reference_index = event_search.resolve_reference_index(query, len(last_results))
     named_event = named_event_match(query)
 
+    # Security and product-boundary checks must win over conversation-meta
+    # wording.  Otherwise an injected sentence could be mistaken for a safe
+    # request to explain the previous result set.
+    if (
+        event_search.classify_intent(query) in {"injection", "out_of_scope"}
+        or conversation_recovery.is_domain_out_of_scope(query)
+    ):
+        return ConversationRoute("scope_search", faq_match=faq_match, search_required=True)
+
     # Conversation-meta questions are evaluated before FAQ and before the
     # generative Command path.  Their answer must use the prior deterministic
     # search context, not a new search or a generic FAQ no-hit response.
@@ -206,7 +215,11 @@ def route_conversation(
         target = None
         if reference_index is not None and 0 <= reference_index < len(last_results):
             target = last_results[reference_index]
-        elif selected_event is not None and conversation_recovery.is_ambiguous_reference_query(query):
+        elif (
+            selected_event is not None
+            and conversation_recovery.is_ambiguous_reference_query(query)
+            and not conversation_recovery.has_explicit_position_reference(query)
+        ):
             target = selected_event
         return ConversationRoute(
             "explain_result",
@@ -307,12 +320,6 @@ def route_conversation(
         if is_general_faq_context(query, faq_match, reference_date):
             return ConversationRoute("general_faq", faq_match=faq_match)
         return ConversationRoute("nearby", faq_match=faq_match)
-
-    if (
-        event_search.classify_intent(query) in {"injection", "out_of_scope"}
-        or conversation_recovery.is_domain_out_of_scope(query)
-    ):
-        return ConversationRoute("scope_search", faq_match=faq_match, search_required=True)
 
     if is_general_faq_context(query, faq_match, reference_date):
         return ConversationRoute("general_faq", faq_match=faq_match)
