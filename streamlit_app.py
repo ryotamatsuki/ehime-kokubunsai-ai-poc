@@ -2675,6 +2675,21 @@ if prompt:
             # Event facts remain grounded in events.json.  Modal is reserved
             # for discovery guidance over already-filtered candidates.
             answer = _facts_answer(results, filters.requested_field)
+        elif (
+            filters.experience_required
+            or filters.experience_preferred
+            or filters.experience_excluded
+        ):
+            # Keep the user-facing explanation deterministic when the legacy
+            # UI path is used.  Experience facts are already resolved and
+            # matched by Python; the optional Writer must not replace that
+            # grounded explanation with a generic or speculative lead.
+            answer = experience_preferences.render_result_message(
+                search_result.total_matches,
+                required=filters.experience_required,
+                preferred=filters.experience_preferred,
+                excluded=filters.experience_excluded,
+            )
         else:
             answer = _call_modal(
                 modal_url=modal_url,
