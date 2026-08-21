@@ -35,6 +35,8 @@ FLOW_NAMES = frozenset(
         "recommend_next",
         "recommend_similar",
         "plan_event_pair",
+        "explain_search",
+        "explain_result",
         "general_faq",
         "unsupported",
     }

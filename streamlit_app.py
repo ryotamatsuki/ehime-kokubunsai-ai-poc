@@ -712,18 +712,33 @@ def _command_state(
         if pending_command and isinstance(pending_command.get("command"), Mapping)
         else None
     )
+    search_context = conversation_recovery.SearchContext.from_value(
+        st.session_state.get("last_search_context")
+    )
+    result_ids = list(
+        st.session_state.get("last_result_ids") or _event_ids(previous_results)
+    )
     state: dict[str, Any] = {
         "reference_date": POC_REFERENCE_DATE.isoformat(),
         "selected_event_id": str(selected_event_id or "") or None,
-        "last_result_ids": list(
-            st.session_state.get("last_result_ids") or _event_ids(previous_results)
-        ),
+        "last_result_ids": result_ids,
         "last_command": pending_plan or st.session_state.get("last_command"),
         "active_flow": pending_command.get("flow") if pending_command else None,
         "pending_slots": dict(pending_plan.get("slots", {})) if pending_plan else {},
         "pending_required_slots": list(pending_command.get("missing_slots", []))
         if pending_command
         else [],
+        # The raw context is passed only to the trusted Python orchestrator so
+        # its fixed recovery executor can render grounded evidence. The
+        # orchestrator's generation projection deliberately excludes it.
+        "last_search_context": search_context.to_dict() if search_context else None,
+        "last_action": st.session_state.get("last_action"),
+        "has_last_search_context": search_context is not None,
+        "last_result_count": (
+            search_context.total_matches
+            if search_context is not None
+            else len(result_ids)
+        ),
     }
     return state
 
@@ -1099,6 +1114,7 @@ def _normalize_command_outcome(
         or pending
         or question
         or message
+        or flow in {"explain_search", "explain_result"}
         or flow == "unsupported"
     )
     if not has_result:
@@ -1327,6 +1343,8 @@ def _pending_state_for_outcome(outcome: _CommandOutcome) -> dict[str, Any] | Non
 def _command_pending_question(outcome: _CommandOutcome) -> str:
     """Render a safe slot question without exposing model-generated facts."""
 
+    if outcome.flow == "explain_result":
+        return "どのイベントの根拠か、番号かイベント名を教えてみて。"
     missing_slots = (outcome.pending or {}).get("missing_slots", [])
     if "time_after" in missing_slots or (outcome.pending or {}).get("awaiting") == "time":
         return "何時ごろ見終わる予定？"
@@ -1431,6 +1449,7 @@ def _render_command_outcome(
     *,
     prompt: str,
     previous_results: list[dict[str, Any]],
+    previous_search_context: conversation_recovery.SearchContext | None = None,
     route: Any,
     detail_field: str | None,
 ) -> _CommandRender:
@@ -1447,6 +1466,43 @@ def _render_command_outcome(
             selected_event=None,
             pair_results=[],
             pending_state=pending_state,
+        )
+
+    if outcome.flow == "explain_search":
+        answer = (
+            outcome.message
+            or conversation_recovery.render_search_explanation(previous_search_context)
+            if previous_search_context is not None
+            else outcome.message
+            or "直前の検索結果がないけん、まずイベントを探してみて。"
+        )
+        return _CommandRender(
+            answer=answer,
+            results=previous_results,
+            near_results=[],
+            relaxed_condition=None,
+            filters=None,
+            selected_event=None,
+            pair_results=[],
+            pending_state=None,
+        )
+
+    if outcome.flow == "explain_result":
+        selected = outcome.events[0] if outcome.events else None
+        answer = outcome.message or conversation_recovery.render_result_explanation(
+            previous_search_context,
+            selected,
+            query=prompt,
+        )
+        return _CommandRender(
+            answer=answer,
+            results=previous_results,
+            near_results=[],
+            relaxed_condition=None,
+            filters=None,
+            selected_event=selected,
+            pair_results=[],
+            pending_state=None,
         )
 
     if outcome.pairs:
@@ -2031,6 +2087,30 @@ def _run_next_recommendation(
     )
 
 
+def _build_recommendation_context(
+    query: str,
+    events: list[dict[str, Any]],
+    *,
+    policy: str,
+) -> conversation_recovery.SearchContext:
+    """Persist a fresh context for legacy recommendation result sets.
+
+    Recommendations are deterministic Python results too. Keeping their
+    ordered IDs in a new SearchContext prevents a later explanation/refinement
+    turn from silently reusing the search that produced the seed event.
+    """
+
+    parsed = event_search.parse_query(query, POC_REFERENCE_DATE)
+    return conversation_recovery.build_search_context(
+        query,
+        parsed,
+        events,
+        result_ids=_event_ids(events),
+        total_matches=len(events),
+        selection_policy=policy,
+    )
+
+
 def _is_reset_query(query: str) -> bool:
     return recommendation_pending.is_reset_query(query)
 
@@ -2058,6 +2138,7 @@ def _reset() -> None:
         "pending_recommendation",
         "pending_command",
         "last_command",
+        "last_action",
         "last_pair_results",
     ):
         st.session_state.pop(key, None)
@@ -2127,6 +2208,8 @@ if "last_plan" not in st.session_state:
     st.session_state.last_plan = None
 if "last_search_context" not in st.session_state:
     st.session_state.last_search_context = None
+if "last_action" not in st.session_state:
+    st.session_state.last_action = None
 if "suppress_result_cards" not in st.session_state:
     st.session_state.suppress_result_cards = False
 if "recovery_display_results" not in st.session_state:
@@ -2282,18 +2365,21 @@ if prompt:
         st.session_state.get("last_filters"),
         POC_REFERENCE_DATE,
     )
-    # Ordinal/pronoun follow-ups have already been resolved deterministically
-    # against the full previous result set.  Keep them on the router path so a
-    # generative Command plan cannot reinterpret "21番目はどこ？" as a
-    # recommendation or date question.
+    detail_field = route.detail_field
+    # Explicit high-confidence recovery/detail branches stay deterministic.
+    # A bare reference_followup without a factual detail field is allowed to
+    # reach the existing Semantic Command Generator: phrases such as
+    # "2番目が条件に合う理由" are not a card lookup and must be classified
+    # semantically as explain_result.
     prefer_router_reference = route.action_type in {
-        "reference_followup",
         "detail_followup",
         "explain_search",
         "explain_result",
         "clarify_reference",
-    }
-    detail_field = route.detail_field
+    } or (
+        route.action_type == "reference_followup"
+        and detail_field is not None
+    )
     pending_decision = recommendation_pending.PendingDecision(False)
     pending_handled = False
     pending_result_set_replaced = False
@@ -2474,6 +2560,7 @@ if prompt:
                 command_outcome,
                 prompt=prompt,
                 previous_results=previous_results,
+                previous_search_context=previous_search_context,
                 route=route,
                 detail_field=detail_field,
             )
@@ -2560,6 +2647,20 @@ if prompt:
         relaxed_condition = command_render.relaxed_condition
         selected_event = command_render.selected_event
         if command_outcome is not None and command_outcome.flow in {
+            "explain_search",
+            "explain_result",
+            "general_faq",
+            "unsupported",
+        }:
+            # Recovery/FAQ/boundary turns must not re-render stale result cards.
+            suppress_cards_for_turn = True
+        if (
+            command_outcome is not None
+            and command_outcome.flow == "explain_result"
+            and selected_event is not None
+        ):
+            recovery_display_results_for_turn = [selected_event]
+        if command_outcome is not None and command_outcome.flow in {
             "find_events",
             "count_events",
             "recommend_next",
@@ -2574,6 +2675,11 @@ if prompt:
                 trace_events,
                 result_ids=command_ids,
                 total_matches=command_outcome.total_matches,
+                selection_policy=(
+                    f"semantic_command_{command_outcome.flow}"
+                    if command_outcome.flow in {"recommend_next", "recommend_similar"}
+                    else "deterministic_hard_filters_then_existing_ranker"
+                ),
             )
     elif pending_handled:
         if pending_decision.event is not None:
@@ -2593,8 +2699,13 @@ if prompt:
             else:
                 answer = recommendation.message
                 recommendation_result_count = len(recommendation.events)
-                results = list(recommendation.events) or previous_results
-                pending_result_set_replaced = bool(recommendation.events)
+                results = list(recommendation.events)
+                pending_result_set_replaced = True
+                search_context_for_turn = _build_recommendation_context(
+                    prompt,
+                    results,
+                    policy="legacy_recommend_next_pending",
+                )
         else:
             answer = "推薦条件を確認できませんでした。イベント名からもう一度探してみて。"
     elif agentic_response is not None:
@@ -2606,14 +2717,22 @@ if prompt:
         results = previous_results
         suppress_cards_for_turn = True
     elif route.action_type == "explain_result":
-        selected_event = (
-            dict(route.selected_event)
-            if isinstance(route.selected_event, Mapping)
-            else None
-        )
-        if selected_event is None and route.reference_index is not None:
-            if 0 <= route.reference_index < len(previous_results):
-                selected_event = dict(previous_results[route.reference_index])
+        selected_event = None
+        if previous_search_context is not None and route.reference_index is not None:
+            selected_event = dict(
+                conversation_recovery.reference_event(
+                    previous_search_context,
+                    previous_results,
+                    route.reference_index,
+                )
+                or {}
+            ) or None
+        elif (
+            previous_search_context is not None
+            and isinstance(route.selected_event, Mapping)
+            and _event_key(route.selected_event) in set(previous_search_context.result_ids)
+        ):
+            selected_event = dict(route.selected_event)
         answer = conversation_recovery.render_result_explanation(
             previous_search_context,
             selected_event,
@@ -2700,7 +2819,12 @@ if prompt:
                 else:
                     answer = recommendation.message
                     recommendation_result_count = len(recommendation.events)
-                    results = list(recommendation.events) or previous_results
+                    results = list(recommendation.events)
+                    search_context_for_turn = _build_recommendation_context(
+                        prompt,
+                        results,
+                        policy="legacy_recommend_next",
+                    )
     elif route.action_type == "recommend_similar_without_selection":
         answer = "まず基準にするイベントを1件選んでみて。"
         results = previous_results
@@ -2725,7 +2849,12 @@ if prompt:
             )
             answer = recommendation.message
             recommendation_result_count = len(recommendation.events)
-            results = list(recommendation.events) or previous_results
+            results = list(recommendation.events)
+            search_context_for_turn = _build_recommendation_context(
+                prompt,
+                results,
+                policy="legacy_recommend_similar",
+            )
     elif route.action_type == "nearby":
         answer = NEARBY_MESSAGE
         suppress_cards_for_turn = True
@@ -3008,6 +3137,18 @@ if prompt:
             },
             "writer_skipped": agentic_response.writer_skipped,
         }
+    elif search_context_for_turn is not None and (
+        route.action_type in {"recommend_next", "recommend_similar"}
+        or pending_handled
+    ):
+        # A legacy recommendation is a fresh deterministic result set, not a
+        # continuation of the seed search's filter object.
+        st.session_state.last_filters = None
+        st.session_state.last_plan = {
+            "mode": "recommendation",
+            "policy": search_context_for_turn.selection_policy,
+            "total_matches": search_context_for_turn.total_matches,
+        }
     if route.action_type == "scope_search":
         # A domain/security fallback must not leave its old search contract
         # available to a later refinement turn.
@@ -3049,5 +3190,6 @@ if prompt:
     st.session_state.suppress_result_cards = suppress_cards_for_turn
     st.session_state.recovery_display_results = recovery_display_results_for_turn
     st.session_state.last_query = prompt
+    st.session_state.last_action = turn_flow
     st.session_state.feedback = None
     st.rerun()

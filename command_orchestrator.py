@@ -17,6 +17,7 @@ import time
 from typing import Any, Callable, Mapping, Sequence
 
 import agent_tools
+import conversation_recovery
 import event_details
 import event_recommendation
 import event_search
@@ -199,6 +200,12 @@ class CommandState:
     active_flow: str | None = None
     pending_slots: Mapping[str, Any] = field(default_factory=dict)
     pending_required_slots: tuple[str, ...] = ()
+    last_search_context: conversation_recovery.SearchContext | None = None
+    # Recovery metadata only.  The actual SearchContext and public evidence
+    # remain in Python/Streamlit state and are never sent to the generator.
+    last_action: str | None = None
+    has_last_search_context: bool = False
+    last_result_count: int = 0
 
     @property
     def requested_slot(self) -> str | None:
@@ -263,6 +270,19 @@ class CommandState:
         )
         active_flow = raw.get("active_flow")
         active_flow = str(active_flow) if isinstance(active_flow, str) else None
+        last_action = raw.get("last_action")
+        last_action = str(last_action)[:64] if isinstance(last_action, str) else None
+        last_search_context = conversation_recovery.SearchContext.from_value(
+            raw.get("last_search_context")
+        )
+        # The boolean is useful semantic metadata, but Python must validate
+        # recovery against the actual trusted context object. A forged or
+        # stale flag alone must never unlock an explanation path.
+        has_context = last_search_context is not None
+        raw_count = raw.get("last_result_count", len(result_ids))
+        if isinstance(raw_count, bool) or not isinstance(raw_count, int):
+            raw_count = len(result_ids)
+        last_result_count = max(0, min(raw_count, MAX_RESULT_SET_SIZE))
         return cls(
             reference_date=reference_date,
             selected_event_id=selected_id,
@@ -271,6 +291,14 @@ class CommandState:
             active_flow=active_flow,
             pending_slots=dict(pending_slots),
             pending_required_slots=required_slots,
+            last_search_context=last_search_context,
+            last_action=last_action,
+            has_last_search_context=has_context,
+            last_result_count=(
+                last_search_context.total_matches
+                if last_search_context is not None
+                else last_result_count
+            ),
         )
 
 
@@ -497,6 +525,39 @@ class DeterministicAdapters:
             return self._by_id.get(state.selected_event_id or "")
         return None
 
+    def resolve_context_reference(
+        self,
+        slots: CommandSlots,
+        state: CommandState,
+    ) -> dict[str, Any] | None:
+        """Resolve an explanation target only inside the active SearchContext.
+
+        The complete ordered ``result_ids`` list is the source of truth. The
+        visible card page and the global event catalog are never allowed to
+        widen a follow-up reference.
+        """
+
+        context = state.last_search_context
+        if context is None:
+            return None
+        allowed_ids = set(context.result_ids)
+        if not allowed_ids:
+            return None
+
+        if slots.reference_index is not None or slots.reference_kind in {
+            "ordinal",
+            "last_result",
+        }:
+            index = slots.reference_index or 1
+            if 1 <= index <= len(context.result_ids):
+                return self._by_id.get(context.result_ids[index - 1])
+            return None
+
+        event = self.resolve_reference(slots, state)
+        if event is None or _event_id(event) not in allowed_ids:
+            return None
+        return event
+
     def detail(self, slots: CommandSlots, state: CommandState) -> tuple[ToolResult, dict[str, Any] | None]:
         selected = self.resolve_reference(slots, state)
         spec = SearchSpec(
@@ -647,6 +708,62 @@ class FlowDispatcher:
         if executor_name == "search_faq":
             result = self.adapters.faq(query)
             return result, [], [], None, result.message
+        if executor_name == "explain_search":
+            message = conversation_recovery.render_search_explanation(
+                state.last_search_context
+            )
+            return (
+                ToolResult(
+                    search_id="command-explain-search",
+                    purpose="recovery",
+                    total_matches=state.last_result_count,
+                    message=message,
+                ),
+                [],
+                [],
+                None,
+                message,
+            )
+        if executor_name == "explain_result":
+            selected = self.adapters.resolve_context_reference(plan.slots, state)
+            if selected is None:
+                message = conversation_recovery.render_result_explanation(
+                    state.last_search_context,
+                    None,
+                    query=query,
+                )
+                return (
+                    ToolResult(
+                        search_id="command-explain-result",
+                        purpose="recovery",
+                        total_matches=0,
+                        message=message,
+                    ),
+                    [],
+                    [],
+                    None,
+                    message,
+                )
+            event = dict(selected)
+            message = conversation_recovery.render_result_explanation(
+                state.last_search_context,
+                event,
+                query=query,
+            )
+            return (
+                ToolResult(
+                    search_id="command-explain-result",
+                    purpose="recovery",
+                    total_matches=1,
+                    events=[event],
+                    all_event_ids=[_event_id(event)],
+                    message=message,
+                ),
+                [],
+                [],
+                None,
+                message,
+            )
         raise CommandValidationError(f"unhandled registered flow {plan.flow!r}", path="flow")
 
 
@@ -672,7 +789,7 @@ class CommandOrchestrator:
         intent = event_search.classify_intent(query)
         if intent == "injection":
             return "この案内の制約を変更したり、掲載されていないイベントを作ったりはできません。掲載済みのイベントから探してみて。"
-        if intent == "out_of_scope":
+        if intent == "out_of_scope" or conversation_recovery.is_domain_out_of_scope(query):
             return "このPoCは文化祭イベントの検索・参加案内が中心です。"
         return None
 
@@ -781,6 +898,11 @@ class CommandOrchestrator:
         values.
         """
 
+        if plan.flow in {"explain_search", "explain_result"}:
+            # Recovery semantics and references come from the command plan;
+            # do not reinterpret an explanation utterance as search filters.
+            return plan
+
         parsed = event_search.parse_query(query, state.reference_date)
         experience_query = experience_preferences.resolve_experience_query(query)
         query_dates = list(parsed.dates)
@@ -866,6 +988,12 @@ class CommandOrchestrator:
             if adapters.resolve_reference(plan.slots, state) is None:
                 # This is a clarification rather than a fabricated reference.
                 required.append("reference")
+        if plan.flow == "explain_result":
+            if adapters.resolve_context_reference(plan.slots, state) is None:
+                # Explanation references are narrower than ordinary detail
+                # references: a named/global event outside the active result
+                # set must not be explained as if it were selected.
+                required.append("reference")
         if plan.flow == "recommend_next":
             selected = adapters.resolve_reference(plan.slots, state)
             if selected is not None:
@@ -895,6 +1023,9 @@ class CommandOrchestrator:
                 "pending_slots": dict(state.pending_slots),
                 "pending_required_slots": list(state.pending_required_slots),
                 "requested_slot": state.requested_slot,
+                "last_action": state.last_action,
+                "has_last_search_context": state.has_last_search_context,
+                "last_result_count": state.last_result_count,
             },
             call=self.modal_call,
             output_format=self.output_format,
@@ -1130,6 +1261,26 @@ class CommandOrchestrator:
 
         if command_plan is None:
             plan = self._reconcile_generated_slots(plan, value, context)
+
+        if plan.flow in {"explain_search", "explain_result"} and context.last_search_context is None:
+            message = (
+                "直前の検索結果がないけん、まずイベントを探してみて。"
+                if plan.flow == "explain_search"
+                else "直前の検索結果がないけん、まずイベントを探してから根拠を確認してみて。"
+            )
+            return self._result(
+                plan=plan,
+                status="clarification",
+                message=message,
+                attempts=generated.attempts if generated else 0,
+                repaired=generated.repaired if generated else False,
+                latency=CommandLatency(
+                    generator_ms=generation_ms,
+                    total_ms=(time.perf_counter() - started) * 1000,
+                    generator_calls=generated.attempts if generated else 0,
+                    repair_calls=max(0, (generated.attempts if generated else 0) - 1),
+                ),
+            )
 
         missing = self._dynamic_missing(plan, context, self.adapters)
         if missing:

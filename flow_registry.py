@@ -160,6 +160,24 @@ FLOW_REGISTRY: dict[str, FlowSpec] = {
         required_slots=("dates",),
         executor_name="recommend_event_pairs",
     ),
+    "explain_search": FlowSpec(
+        name="explain_search",
+        description=(
+            "直前に提示したイベント検索結果について、候補を選んだ条件、基準、"
+            "観点、判断材料、検索ロジック、根拠を利用者が確認したい場合"
+        ),
+        required_slots=(),
+        executor_name="explain_search",
+    ),
+    "explain_result": FlowSpec(
+        name="explain_result",
+        description=(
+            "直前の検索結果中の特定イベントについて、なぜ候補に含まれたか、"
+            "指定条件を満たす構造化根拠を利用者が確認したい場合"
+        ),
+        required_slots=(),
+        executor_name="explain_result",
+    ),
     "general_faq": FlowSpec(
         name="general_faq",
         description="特定イベントではなく文化祭全体についてよくある質問を確認する",

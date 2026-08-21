@@ -183,7 +183,8 @@ def sanitize_command_state(raw_state: Any) -> dict[str, Any]:
     allowed = (
         "reference_date", "selected_event_id", "last_result_ids",
         "last_command", "active_flow", "pending_slots",
-        "pending_required_slots", "requested_slot",
+        "pending_required_slots", "requested_slot", "last_action",
+        "has_last_search_context", "last_result_count",
     )
     state = {key: _safe_state_value(raw_state[key]) for key in allowed if key in raw_state}
     result_ids = raw_state.get("last_result_ids")
@@ -197,7 +198,14 @@ def sanitize_command_state(raw_state: Any) -> dict[str, Any]:
         return state
     return {
         key: state[key]
-        for key in ("reference_date", "selected_event_id", "active_flow")
+        for key in (
+            "reference_date",
+            "selected_event_id",
+            "active_flow",
+            "last_action",
+            "has_last_search_context",
+            "last_result_count",
+        )
         if key in state
     }
 
@@ -272,6 +280,14 @@ def build_command_system_prompt(output_format: str = DEFAULT_COMMAND_FORMAT) -> 
         "topicsには歴史、俳句、工芸、紙、祭りなど実質的テーマだけを入れてください。\n"
         "「含めて」「一緒に」「楽しみたい」「行きたい」「探して」などをtopicにコピーしてはいけません。\n"
         "家族・親子・子どもを含む意味はaudienceで表し、歴史的な建物のようなテーマはvenueにしません。\n\n"
+        "Recovery flowの意味判定:\n"
+        "- 直前の候補全体について、何を材料に選んだか、どういう観点・ロジック・理由で"
+        "この結果になったかを尋ねる発話は explain_search。表現が『基準』『条件』を"
+        "含まなくても、検索結果全体の選定理由を尋ねていればこのflowを選びます。\n"
+        "- 番号、順位、イベント名、選択中のイベントなど特定の1件について、なぜ含まれたか、"
+        "どの条件に合うか、根拠は何かを尋ねる発話は explain_result。\n"
+        "- 料金、日時、場所、申込、雨天対応など単なる事実確認は event_detail。"
+        "検索理由の文章やイベント事実は絶対に出力せず、flowとslotsだけを返します。\n\n"
         f"{output_rules}"
     )
 

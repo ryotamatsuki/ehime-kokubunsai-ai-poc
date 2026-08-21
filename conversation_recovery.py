@@ -121,8 +121,13 @@ _DOMAIN_BOUNDARY_MARKERS = (
     "ニュース",
     "python",
     "システムプロンプト",
+    "内部の制約",
     "個人情報",
     "秘密の設定",
+    "非公開データ",
+    "chain of thought",
+    "架空イベント",
+    "でっち上げ",
 )
 
 
@@ -268,7 +273,12 @@ def _present_conditions(filters: Mapping[str, Any]) -> dict[str, Any]:
     }
     result: dict[str, Any] = {}
     for key, value in filters.items():
-        if key in ignored or value in (None, False, "", [], ()):
+        if key in ignored or value in (None, "", [], ()):
+            continue
+        # ``reservation_required=False`` is an explicit user condition. Other
+        # false booleans are parser defaults and would make every explanation
+        # claim an unrequested negative filter.
+        if value is False and key != "reservation_required":
             continue
         result[str(key)] = value
     return result
@@ -302,6 +312,8 @@ def _condition_label(key: str, value: Any) -> str:
         "experience_excluded": "体験条件（除外）",
     }
     label = labels.get(key, key)
+    if key == "reservation_required":
+        return "申込必要" if value is True else "申込不要" if value is False else f"申込要否: {value}"
     if key.startswith("experience_") and isinstance(value, (list, tuple)):
         rendered: list[str] = []
         for item in value:
@@ -371,16 +383,27 @@ def _fact_evidence(event: Mapping[str, Any], filters: Mapping[str, Any]) -> list
         "regions": "地域",
         "genres": "ジャンル",
         "venue": "屋内/屋外",
+        "rain_preferred": "屋内/屋外",
         "entry_free": "料金",
+        "paid_only": "料金",
+        "max_entry_fee": "料金",
         "reservation_required": "参加案内.申込要否",
         "child_friendly": "子ども向け",
+        "age": "参加案内.対象年齢",
+        "age_group": "参加案内.対象年齢",
+        "time_slots": "日時",
+        "time_after": "日時",
+        "soft_terms": "search_tags",
     }
     for key, field_name in field_map.items():
         value = filters.get(key)
-        if value in (None, False, [], ()):
+        if value in (None, [], ()) or (value is False and key != "reservation_required"):
             continue
         if key == "reservation_required":
             current = event.get("参加案内", {}).get("申込要否") if isinstance(event.get("参加案内"), Mapping) else None
+        elif field_name == "参加案内.対象年齢":
+            participation = event.get("参加案内")
+            current = participation.get("対象年齢") if isinstance(participation, Mapping) else None
         else:
             current = event.get(field_name)
         evidence.append(
@@ -471,7 +494,9 @@ def _merge_search_spec_filters(specs: Sequence[Mapping[str, Any]]) -> dict[str, 
         if not isinstance(filters, Mapping):
             continue
         for key, value in filters.items():
-            if value in (None, False, "", [], ()):
+            if value in (None, "", [], ()) or (
+                value is False and str(key) != "reservation_required"
+            ):
                 continue
             if isinstance(value, (list, tuple)):
                 current = merged.setdefault(str(key), [])
@@ -495,7 +520,7 @@ def _effective_conditions(context: SearchContext) -> dict[str, Any]:
 
 
 def render_search_explanation(context: SearchContext | None) -> str:
-    if context is None or not context.result_ids:
+    if context is None:
         return "直前の検索条件を確認できませんでした。もう一度、探したい条件を教えてみて。"
     conditions = _effective_conditions(context)
     labels = [_condition_label(key, value) for key, value in conditions.items()]
