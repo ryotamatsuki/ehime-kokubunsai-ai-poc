@@ -2197,16 +2197,46 @@ if prompt:
                             pending_state=None,
                         )
             else:
-                # A non-date turn starts a new question.  Clear the pending
-                # Command flow and let the new Command/legacy router handle it.
-                st.session_state.pop("pending_command", None)
-                active_command_pending = None
-                command_pending_to_store = None
-                command_outcome = _call_new_command(
+                awaiting = str(active_command_pending.get("awaiting") or "")
+                pending_kind = event_recommendation.classify_pending_answer(
                     prompt,
-                    state=_command_state(previous_results),
-                    modal_config=ModalConfig(modal_url, modal_key, modal_secret),
+                    awaiting=(
+                        "date"
+                        if awaiting in {"date", "dates"}
+                        or active_command_pending.get("flow") == "plan_event_pair"
+                        else "time"
+                    ),
+                    reference_date=POC_REFERENCE_DATE,
                 )
+                if pending_kind == event_recommendation.PENDING_AMBIGUOUS:
+                    # Preserve the authoritative flow until the user gives a
+                    # recognizable slot answer or an explicit new request.
+                    command_handled = True
+                    command_render = _CommandRender(
+                        answer=(
+                            "何時ごろ見終わる予定か、13時のように教えてみて。"
+                            if awaiting in {"time", "time_after", "end_time"}
+                            else "何日に行く予定か、11/4のように教えてみて。"
+                        ),
+                        results=previous_results,
+                        near_results=[],
+                        relaxed_condition=None,
+                        filters=None,
+                        selected_event=None,
+                        pair_results=[],
+                        pending_state=active_command_pending,
+                    )
+                else:
+                    # An explicit new request interrupts the pending Command
+                    # flow and is routed from a clean conversation state.
+                    st.session_state.pop("pending_command", None)
+                    active_command_pending = None
+                    command_pending_to_store = None
+                    command_outcome = _call_new_command(
+                        prompt,
+                        state=_command_state(previous_results),
+                        modal_config=ModalConfig(modal_url, modal_key, modal_secret),
+                    )
         else:
             command_outcome = _call_new_command(
                 prompt,
