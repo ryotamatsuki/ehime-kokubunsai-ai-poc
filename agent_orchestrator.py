@@ -268,6 +268,9 @@ def evaluate_fast_path(
         "recommend_similar",
         "recommend_similar_without_selection",
         "nearby",
+        "explain_search",
+        "explain_result",
+        "clarify_reference",
     }:
         return FastDecision(True, route.action_type)
     if parsed.intent in {"injection", "out_of_scope", "needs_location", "needs_region"}:
@@ -319,6 +322,9 @@ def should_use_agentic_search(
         "recommend_next_without_selection",
         "recommend_similar_without_selection",
         "nearby",
+        "explain_search",
+        "explain_result",
+        "clarify_reference",
     }:
         return False
     if route.action_type not in {"search", "generic_scope"}:
