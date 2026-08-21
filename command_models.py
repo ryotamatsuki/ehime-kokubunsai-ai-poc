@@ -20,6 +20,7 @@ import re
 from typing import Any, Mapping
 
 import age_semantics
+import experience_preferences
 from app_config import GENRE_ALIASES, MAX_RESULT_SET_SIZE, REGION_CITIES
 
 
@@ -126,6 +127,7 @@ EVENT_DETAIL_FIELDS = (
     "申込",
     "アクセス",
     "雨天",
+    "experience_profile",
 )
 ALLOWED_DETAIL_FIELDS = frozenset(EVENT_DETAIL_FIELDS)
 
@@ -140,6 +142,10 @@ ALLOWED_REFERENCE_KINDS = REFERENCE_KIND_VALUES
 ALLOWED_GENRES = GENRE_VALUES
 VALID_MUNICIPALITIES = CANONICAL_MUNICIPALITIES
 VALID_REGIONS = CANONICAL_REGIONS
+ALLOWED_EXPERIENCE_CONCEPTS = experience_preferences.EXPERIENCE_CONCEPT_IDS
+EXPERIENCE_SLOT_FIELDS = frozenset(
+    {"experience_required", "experience_preferred", "experience_excluded"}
+)
 
 
 class CommandValidationError(ValueError):
@@ -162,6 +168,9 @@ _SLOT_COLLECTION_FIELDS = (
     "regions",
     "genres",
     "topics",
+    "experience_required",
+    "experience_preferred",
+    "experience_excluded",
     "time_slots",
     "detail_fields",
 )
@@ -299,6 +308,9 @@ class CommandSlots:
     regions: tuple[str, ...] = ()
     genres: tuple[str, ...] = ()
     topics: tuple[str, ...] = ()
+    experience_required: tuple[str, ...] = ()
+    experience_preferred: tuple[str, ...] = ()
+    experience_excluded: tuple[str, ...] = ()
 
     audience: str | None = None
     age: int | None = None
@@ -366,6 +378,33 @@ class CommandSlots:
             for marker in NON_TOPIC_MARKERS
         ):
             _fail("conversation scaffolding is not a topic", "slots.topics")
+        if any(experience_preferences.is_experience_phrase(topic) for topic in topics):
+            _fail(
+                "experience language must use an experience slot",
+                "slots.topics",
+            )
+
+        def _experience_slot(field_name: str) -> tuple[str, ...]:
+            try:
+                return experience_preferences.normalize_concept_ids(
+                    getattr(self, field_name),
+                    field_name=field_name,
+                )
+            except experience_preferences.ExperienceVocabularyError as exc:
+                _fail(str(exc), f"slots.{field_name}")
+            raise AssertionError("unreachable")
+
+        experience_required = _experience_slot("experience_required")
+        experience_preferred = _experience_slot("experience_preferred")
+        experience_excluded = _experience_slot("experience_excluded")
+        try:
+            experience_preferences.ExperienceQuery(
+                required=experience_required,
+                preferred=experience_preferred,
+                excluded=experience_excluded,
+            )
+        except experience_preferences.ExperienceVocabularyError as exc:
+            _fail(str(exc), "slots.experience")
 
         time_slots = tuple(
             _text(value, path=f"slots.time_slots[{index}]", max_length=16)
@@ -390,6 +429,9 @@ class CommandSlots:
         object.__setattr__(self, "regions", regions)
         object.__setattr__(self, "genres", genres)
         object.__setattr__(self, "topics", topics)
+        object.__setattr__(self, "experience_required", experience_required)
+        object.__setattr__(self, "experience_preferred", experience_preferred)
+        object.__setattr__(self, "experience_excluded", experience_excluded)
         object.__setattr__(self, "time_slots", time_slots)
         object.__setattr__(self, "detail_fields", detail_fields)
 
@@ -526,6 +568,9 @@ class CommandSlots:
             "regions": list(self.regions),
             "genres": list(self.genres),
             "topics": list(self.topics),
+            "experience_required": list(self.experience_required),
+            "experience_preferred": list(self.experience_preferred),
+            "experience_excluded": list(self.experience_excluded),
             "audience": self.audience,
             "age": self.age,
             "age_group": self.age_group,
@@ -726,6 +771,7 @@ __all__ = [
     "ALLOWED_AGE_INTENTS",
     "ALLOWED_AUDIENCES",
     "ALLOWED_DETAIL_FIELDS",
+    "ALLOWED_EXPERIENCE_CONCEPTS",
     "ALLOWED_GENRES",
     "ALLOWED_REFERENCE_KINDS",
     "ALLOWED_TIME_SLOTS",
@@ -741,6 +787,7 @@ __all__ = [
     "CommandValidationError",
     "CONFIDENCE_VALUES",
     "EVENT_DETAIL_FIELDS",
+    "EXPERIENCE_SLOT_FIELDS",
     "GENRE_VALUES",
     "FLOW_NAMES",
     "MAX_REFERENCE_INDEX",

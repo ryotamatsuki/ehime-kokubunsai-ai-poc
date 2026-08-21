@@ -14,6 +14,7 @@ import re
 from typing import Any, Mapping
 
 import age_semantics
+import experience_preferences
 from command_generator import (
     CommandGenerationResult,
     CommandPlan,
@@ -156,6 +157,7 @@ def _validate_filter_semantics(spec: SearchSpec) -> bool:
         "dates", "municipalities", "regions", "genres", "genre_groups", "age", "age_group",
         "age_intent", "child_friendly", "venue", "entry_free", "paid_only", "max_entry_fee",
         "reservation_required", "rain_preferred", "time_slots", "time_after", "soft_terms",
+        "experience_required", "experience_preferred", "experience_excluded",
     }
     if set(filters) - allowed_search_filters:
         return False
@@ -229,6 +231,27 @@ def _validate_filter_semantics(spec: SearchSpec) -> bool:
         terms = filters["soft_terms"]
         if not isinstance(terms, list) or not terms or not all(isinstance(term, str) and term.strip() for term in terms):
             return False
+    for field_name in (
+        "experience_required",
+        "experience_preferred",
+        "experience_excluded",
+    ):
+        if field_name in filters:
+            try:
+                experience_preferences.normalize_concept_ids(
+                    filters[field_name],
+                    field_name=field_name,
+                )
+            except experience_preferences.ExperienceVocabularyError:
+                return False
+    try:
+        experience_preferences.ExperienceQuery(
+            required=filters.get("experience_required", ()),
+            preferred=filters.get("experience_preferred", ()),
+            excluded=filters.get("experience_excluded", ()),
+        )
+    except experience_preferences.ExperienceVocabularyError:
+        return False
     return True
 
 
@@ -401,6 +424,12 @@ def fallback_search_plan(query: str, reference_date=POC_REFERENCE_DATE) -> Searc
         filters["time_slots"] = list(parsed.time_slots)
     if parsed.time_after is not None:
         filters["time_after"] = parsed.time_after
+    if parsed.experience_required:
+        filters["experience_required"] = list(parsed.experience_required)
+    if parsed.experience_preferred:
+        filters["experience_preferred"] = list(parsed.experience_preferred)
+    if parsed.experience_excluded:
+        filters["experience_excluded"] = list(parsed.experience_excluded)
 
     age_query = age_semantics.query_age_semantics(query)
     if age_query.age is not None:
@@ -426,6 +455,13 @@ def fallback_search_plan(query: str, reference_date=POC_REFERENCE_DATE) -> Searc
     if soft_terms:
         filters["soft_terms"] = soft_terms
 
+    # A release-only utterance is not a request to list the whole catalogue.
+    # Keep the fallback executable but make it a deterministic zero-match,
+    # out-of-catalog date sentinel; the Agentic orchestrator routes this case
+    # to the normal ``needs_condition`` response before planning.
+    if not filters and experience_preferences.has_release_phrase(query):
+        filters["dates"] = ["1900-01-01"]
+
     is_count = any(hint in query for hint in _COUNT_HINTS)
     tool = "count_events" if is_count else "search_events"
     return SearchPlan(
@@ -440,7 +476,13 @@ def fallback_search_plan(query: str, reference_date=POC_REFERENCE_DATE) -> Searc
             ),
         ),
         confidence="medium",
-        allow_replan=bool(filters.get("soft_terms")),
+        allow_replan=bool(filters.get("soft_terms")) and not any(
+            filters.get(key)
+            for key in (
+                "experience_required",
+                "experience_excluded",
+            )
+        ),
     )
 
 
@@ -482,9 +524,74 @@ def request_search_plan(
     context: Mapping[str, Any],
     modal_config: ModalConfig | None = None,
 ) -> SearchPlan:
+    query = str(context.get("query", ""))[:1200]
+    deterministic_experience = experience_preferences.resolve_experience_query(query)
+
+    def reconcile(plan: SearchPlan) -> SearchPlan:
+        """Apply explicit deterministic experience intent to every search."""
+
+        release = experience_preferences.has_release_phrase(query)
+        if not deterministic_experience.recognized and not release:
+            return plan
+        searches: list[SearchSpec] = []
+        for spec in plan.searches:
+            if spec.tool not in {"search_events", "count_events"}:
+                return fallback_search_plan(query, POC_REFERENCE_DATE)
+            filters = dict(spec.filters)
+            if release:
+                for key in (
+                    "experience_required",
+                    "experience_preferred",
+                    "experience_excluded",
+                ):
+                    filters.pop(key, None)
+            else:
+                filters.update(
+                    {
+                        "experience_required": list(deterministic_experience.required),
+                        "experience_preferred": list(deterministic_experience.preferred),
+                        "experience_excluded": list(deterministic_experience.excluded),
+                    }
+                )
+            terms = filters.get("soft_terms")
+            if isinstance(terms, list):
+                cleaned = [
+                    value
+                    for value in (
+                        experience_preferences.remove_experience_phrases(term)
+                        for term in terms
+                    )
+                    if value.strip()
+                ]
+                if cleaned:
+                    filters["soft_terms"] = cleaned
+                else:
+                    filters.pop("soft_terms", None)
+            searches.append(
+                SearchSpec(
+                    search_id=spec.search_id,
+                    tool=spec.tool,
+                    purpose=spec.purpose,
+                    filters=filters,
+                    relaxed=spec.relaxed,
+                    relaxed_fields=spec.relaxed_fields,
+                )
+            )
+        return SearchPlan(
+            intent=plan.intent,
+            answer_type=plan.answer_type,
+            searches=tuple(searches),
+            confidence=plan.confidence,
+            allow_replan=plan.allow_replan and not any(
+                search.filters.get(key)
+                for search in searches
+                for key in ("experience_required", "experience_excluded")
+            ),
+        )
+
     payload = {
         "mode": "planner",
-        "query": str(context.get("query", ""))[:1200],
+        "query": query,
         "state": {
             "reference_date": str(context.get("reference_date", POC_REFERENCE_DATE.isoformat())),
             "selected_event_id": context.get("selected_event_id"),
@@ -495,8 +602,18 @@ def request_search_plan(
     for _ in range(2):
         plan = validate_search_plan(_call_modal_json(modal_config, payload))
         if plan is not None:
-            return plan
-    return fallback_search_plan(str(context.get("query", "")), POC_REFERENCE_DATE)
+            try:
+                reconciled = reconcile(plan)
+                # Re-validate after deterministic reconciliation.  Removing
+                # model-supplied experience text from soft_terms can make a
+                # previously valid-looking plan empty or otherwise invalid;
+                # never execute that untrusted intermediate shape.
+                validated = validate_search_plan(reconciled.to_dict())
+                if validated is not None:
+                    return validated
+            except (TypeError, ValueError, experience_preferences.ExperienceVocabularyError):
+                break
+    return fallback_search_plan(query, POC_REFERENCE_DATE)
 
 
 def request_command_result(

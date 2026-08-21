@@ -17,6 +17,7 @@ from command_models import (
     ALLOWED_AGE_GROUPS,
     ALLOWED_AUDIENCES,
     ALLOWED_DETAIL_FIELDS,
+    ALLOWED_EXPERIENCE_CONCEPTS,
     ALLOWED_REFERENCE_KINDS,
     ALLOWED_TIME_SLOTS,
     ALLOWED_VENUES,
@@ -44,6 +45,9 @@ LOCAL_SOURCE_MODULES = (
     "command_generator",
     "command_models",
     "event_details",
+    "experience_matcher",
+    "experience_preferences",
+    "data_model_v3",
     "flow_registry",
 )
 
@@ -58,6 +62,7 @@ download_image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install("huggingface_hub", "fastapi")
     .add_local_python_source(*LOCAL_SOURCE_MODULES)
+    .add_local_dir("data", remote_path="/root/data")
 )
 
 inference_image = (
@@ -71,6 +76,7 @@ inference_image = (
         "fastapi[standard]",
     )
     .add_local_python_source(*LOCAL_SOURCE_MODULES)
+    .add_local_dir("data", remote_path="/root/data")
 )
 
 
@@ -114,7 +120,8 @@ recommend_similar_events, search_faq
 search_events/count_eventsのfiltersには、dates、municipalities、regions、genres、
 genre_groups、age、age_group、age_intent、child_friendly、venue、entry_free、
 paid_only、max_entry_fee、reservation_required、rain_preferred、time_slots、
-time_after、soft_termsだけを使ってください。
+time_after、soft_terms、experience_required、experience_preferred、
+experience_excludedだけを使ってください。
 
 意味の対応例:
 - 「5歳」「5才」→ age=5, age_group=preschool
@@ -124,6 +131,10 @@ time_after、soft_termsだけを使ってください。
 - 「参加できる」→ age_intent=eligible
 - 「建物の中」「建物内」→ venue=indoor
 - 「予約なし」「申込不要」→ reservation_required=false
+- 「座って楽しめる」「座って見たい」→ experience_required=["seated"]
+- 「できれば座りたい」→ experience_preferred=["seated"]
+- 「歩くイベントは嫌」「まち歩きは除いて」→ experience_excluded=["walk_explore"]
+- Experienceの値はVocabularyのIDだけ。postureやイベント名から推測した値は返さない。
 - 「いくつ」「何件」→ answer_type=count と count_events
 age_groupはpreschool, elementary, junior_high, high_school, adultのいずれか、
 age_intentはrecommendedまたはeligibleだけを使ってください。
@@ -160,6 +171,9 @@ COMMAND_JSON_SCHEMA = {
                 "regions": {"type": "array", "items": {"type": "string"}},
                 "genres": {"type": "array", "items": {"type": "string", "enum": sorted(GENRE_VALUES)}},
                 "topics": {"type": "array", "items": {"type": "string", "maxLength": 64}},
+                "experience_required": {"type": "array", "items": {"type": "string", "enum": sorted(ALLOWED_EXPERIENCE_CONCEPTS), "maxLength": 32}, "maxItems": 8},
+                "experience_preferred": {"type": "array", "items": {"type": "string", "enum": sorted(ALLOWED_EXPERIENCE_CONCEPTS), "maxLength": 32}, "maxItems": 8},
+                "experience_excluded": {"type": "array", "items": {"type": "string", "enum": sorted(ALLOWED_EXPERIENCE_CONCEPTS), "maxLength": 32}, "maxItems": 8},
                 "audience": {"type": "string", "enum": sorted(ALLOWED_AUDIENCES)},
                 "age": {"type": "integer", "minimum": 0, "maximum": 120},
                 "age_group": {"type": "string", "enum": sorted(ALLOWED_AGE_GROUPS)},

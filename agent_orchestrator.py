@@ -16,6 +16,7 @@ from typing import Any, Callable, Mapping, Sequence
 import age_semantics
 import conversation_router
 import event_search
+import experience_preferences
 from agent_models import AgenticLatency, AgenticResponse, MergedResults, SearchPlan, SearchSpec, ToolResult, WriterOutput
 from agent_planner import (
     ModalConfig,
@@ -55,6 +56,9 @@ _RELAXED_FIELD_LABELS = {
     "time_slots": "時間帯条件",
     "time_after": "開始時刻条件",
     "soft_terms": "趣味・キーワード条件",
+    "experience_required": "体験条件",
+    "experience_preferred": "体験の希望条件",
+    "experience_excluded": "除外する体験条件",
 }
 
 
@@ -140,6 +144,18 @@ def assess_parser_coverage(query: str, parsed_filters: event_search.SearchFilter
         recognized.append("time")
     if parsed_filters.soft_terms:
         recognized.append("soft_terms")
+    if parsed_filters.experience_required:
+        recognized.extend(
+            f"experience_required={value}" for value in parsed_filters.experience_required
+        )
+    if parsed_filters.experience_preferred:
+        recognized.extend(
+            f"experience_preferred={value}" for value in parsed_filters.experience_preferred
+        )
+    if parsed_filters.experience_excluded:
+        recognized.extend(
+            f"experience_excluded={value}" for value in parsed_filters.experience_excluded
+        )
 
     unresolved = list(dict.fromkeys(unresolved))
     return ParserCoverage(
@@ -196,6 +212,9 @@ def parser_confidence_is_high(parsed_filters: event_search.SearchFilters, query:
         or parsed_filters.max_entry_fee is not None
         or parsed_filters.time_slots
         or parsed_filters.time_after is not None
+        or parsed_filters.experience_required
+        or parsed_filters.experience_preferred
+        or parsed_filters.experience_excluded
     ):
         return True
     return False
@@ -253,6 +272,29 @@ def evaluate_fast_path(
         return FastDecision(True, route.action_type)
     if parsed.intent in {"injection", "out_of_scope", "needs_location", "needs_region"}:
         return FastDecision(True, parsed.intent)
+    if experience_preferences.has_release_phrase(query) and not any(
+        (
+            parsed.dates,
+            parsed.city_groups,
+            parsed.region_groups,
+            parsed.genre_groups,
+            parsed.experience_required,
+            parsed.experience_preferred,
+            parsed.experience_excluded,
+            parsed.child_friendly,
+            parsed.age is not None,
+            parsed.age_group,
+            parsed.venue,
+            parsed.rain_preferred,
+            parsed.entry_free,
+            parsed.paid_only,
+            parsed.max_entry_fee is not None,
+            parsed.time_slots,
+            parsed.time_after is not None,
+            parsed.soft_terms,
+        )
+    ):
+        return FastDecision(True, "needs_condition")
     if parser_confidence_is_high(parsed, query):
         return FastDecision(True, "high_parser_confidence")
     return FastDecision(False, "agentic_discovery")
@@ -371,6 +413,7 @@ def build_deterministic_facts(
             relaxed_fields.extend(result.relaxed_fields)
         strong_event_ids.extend(result.strong_event_ids)
         reference_event_ids.extend(result.reference_event_ids)
+    experience_query = experience_preferences.resolve_experience_query(query)
     return {
         "query": query,
         "answer_type": plan.answer_type,
@@ -380,6 +423,9 @@ def build_deterministic_facts(
         "relaxed_fields": list(dict.fromkeys(relaxed_fields)),
         "strong_event_ids": list(dict.fromkeys(strong_event_ids)),
         "reference_event_ids": list(dict.fromkeys(reference_event_ids)),
+        "experience_required": list(experience_query.required),
+        "experience_preferred": list(experience_query.preferred),
+        "experience_excluded": list(experience_query.excluded),
     }
 
 
@@ -408,7 +454,23 @@ def build_writer_payload(
 def deterministic_writer_fallback(facts: Mapping[str, Any]) -> WriterOutput:
     exact_ids = tuple(str(value) for value in facts.get("exact_event_ids", []))
     relaxed_ids = tuple(str(value) for value in facts.get("relaxed_event_ids", []))
-    if facts.get("answer_type") == "count":
+    if any(
+        facts.get(key)
+        for key in ("experience_required", "experience_preferred", "experience_excluded")
+    ):
+        lead = experience_preferences.render_result_message(
+            int(facts.get("total_matches", 0)),
+            required=facts.get("experience_required", ()),
+            preferred=facts.get("experience_preferred", ()),
+            excluded=facts.get("experience_excluded", ()),
+        )
+        if (
+            not exact_ids
+            and not relaxed_ids
+            and (facts.get("experience_required") or facts.get("experience_excluded"))
+        ):
+            lead += " 条件を広げる場合は、立ったり歩いたりするイベントを含めてよいか教えてね。"
+    elif facts.get("answer_type") == "count":
         lead = "条件に合うイベントを確認しました。気になる候補は下のカードから見てみて。"
     elif exact_ids:
         lead = "条件に合う候補を見つけたよ。気になる番号を教えてみん？"
@@ -553,7 +615,12 @@ def handle_agentic_query(
     merged = merge_agent_results(all_results)
     facts = build_deterministic_facts(query, current_plan, merged, all_results)
     writer_input = build_writer_payload(query, facts, merged.display_candidates)
-    writer_skipped = str(facts["answer_type"]) == "count" and not facts["relaxed_event_ids"]
+    writer_skipped = (
+        str(facts["answer_type"]) == "count" and not facts["relaxed_event_ids"]
+    ) or any(
+        facts.get(key)
+        for key in ("experience_required", "experience_preferred", "experience_excluded")
+    )
     writer_calls = 0
     writer_ms = 0.0
     if writer_skipped:
