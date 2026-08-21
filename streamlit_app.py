@@ -47,7 +47,7 @@ from command_models import (
 from flow_registry import FLOW_REGISTRY
 from event_image_assets import event_image_path
 from result_pagination import next_visible_count, normalize_visible_count, visible_items
-from result_context import transition_result_context
+from result_context import classify_result_context_source, transition_result_context
 from iyoshirube_ui import (
     EMOTION_NORMAL,
     EMOTION_THINKING,
@@ -2746,25 +2746,17 @@ if prompt:
     if len(previous_near_result_ids) > len(_event_ids(previous_near_results)):
         previous_near_results = _events_for_ids(previous_near_result_ids)
 
-    if command_outcome is not None:
-        context_source = "command"
-        context_flow = command_outcome.flow
-    elif agentic_response is not None:
-        context_source = "agentic"
-        context_flow = "agentic_search"
-    elif search_result is not None:
-        # A legacy named-event detail is a new search.  Router-local detail
-        # follow-ups do not enter this branch and preserve the old context.
-        context_source = "legacy_search"
-        context_flow = turn_flow
-    elif (command_handled or pending_handled) and result_ids == previous_result_ids:
-        # Clarification/confirmation turns can carry a recommendation flow
-        # name while intentionally returning the previous cards unchanged.
-        context_source = "preserving"
-        context_flow = turn_flow
-    else:
-        context_source = "router"
-        context_flow = turn_flow
+    context_source = classify_result_context_source(
+        command_flow=command_outcome.flow if command_outcome is not None else None,
+        search_result_present=search_result is not None,
+        agentic_response_present=agentic_response is not None,
+        command_handled=command_handled,
+        pending_handled=pending_handled,
+        flow=turn_flow,
+        previous_result_ids=previous_result_ids,
+        result_ids=result_ids,
+    )
+    context_flow = turn_flow if command_outcome is None else command_outcome.flow
 
     result_context = transition_result_context(
         previous_results=previous_results,

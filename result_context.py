@@ -101,6 +101,44 @@ def should_replace_result_set(*, flow: str | None, source: str | None) -> bool:
     return normalized_flow in RESULT_SET_REPLACING_FLOWS
 
 
+def classify_result_context_source(
+    *,
+    command_flow: str | None,
+    search_result_present: bool,
+    agentic_response_present: bool,
+    command_handled: bool,
+    pending_handled: bool,
+    flow: str | None,
+    previous_result_ids: Sequence[Any] | None,
+    result_ids: Sequence[Any] | None,
+) -> str:
+    """Select the state-source label used by the Streamlit boundary.
+
+    A Command recommendation may return a clarification that carries the
+    recommendation flow name but leaves the previous cards untouched.  Only
+    that unchanged response is preserving; a real recommendation result still
+    replaces the context.
+    """
+
+    previous = _ordered_ids(previous_result_ids)
+    current = _ordered_ids(result_ids)
+    if command_flow is not None:
+        if (
+            current == previous
+            and command_flow
+            in RESULT_SET_PRESERVING_FLOWS | {"recommend_next", "recommend_similar"}
+        ):
+            return "preserving"
+        return "command"
+    if agentic_response_present:
+        return "agentic"
+    if search_result_present:
+        return "legacy_search"
+    if (command_handled or pending_handled) and current == previous:
+        return "preserving"
+    return "router"
+
+
 def transition_result_context(
     *,
     previous_results: Sequence[Mapping[str, Any]] | None,
@@ -173,6 +211,7 @@ __all__ = [
     "RESULT_SET_PRESERVING_FLOWS",
     "RESULT_SET_REPLACING_FLOWS",
     "ResultContextTransition",
+    "classify_result_context_source",
     "should_replace_result_set",
     "transition_result_context",
 ]

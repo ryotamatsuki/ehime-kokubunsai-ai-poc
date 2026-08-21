@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from command_models import CommandPlan, CommandSlots
 from command_orchestrator import CommandOrchestrator
-from result_context import should_replace_result_set, transition_result_context
+from result_context import (
+    classify_result_context_source,
+    should_replace_result_set,
+    transition_result_context,
+)
 
 
 def _records(ids: list[str]) -> list[dict[str, str]]:
@@ -258,3 +262,90 @@ def test_preserving_recommendation_confirmation_keeps_the_current_page() -> None
     assert not update.replace_result_set
     assert update.result_ids == ids
     assert update.visible_count == 16
+
+
+def test_command_confirmation_with_unchanged_results_is_classified_as_preserving() -> None:
+    ids = [f"{index:03d}" for index in range(1, 29)]
+    assert (
+        classify_result_context_source(
+            command_flow="recommend_next",
+            search_result_present=False,
+            agentic_response_present=False,
+            command_handled=True,
+            pending_handled=False,
+            flow="recommend_next",
+            previous_result_ids=ids,
+            result_ids=ids,
+        )
+        == "preserving"
+    )
+    assert (
+        classify_result_context_source(
+            command_flow="find_events",
+            search_result_present=False,
+            agentic_response_present=False,
+            command_handled=True,
+            pending_handled=False,
+            flow="find_events",
+            previous_result_ids=ids,
+            result_ids=ids,
+        )
+        == "command"
+    )
+
+
+def test_state_boundary_keeps_16_cards_for_confirmation_then_resets_new_search() -> None:
+    old_ids = [f"{index:03d}" for index in range(1, 29)]
+    confirmation_source = classify_result_context_source(
+        command_flow="recommend_next",
+        search_result_present=False,
+        agentic_response_present=False,
+        command_handled=True,
+        pending_handled=False,
+        flow="recommend_next",
+        previous_result_ids=old_ids,
+        result_ids=old_ids,
+    )
+    after_confirmation = transition_result_context(
+        previous_results=_records(old_ids),
+        previous_result_ids=old_ids,
+        previous_near_results=[],
+        previous_near_result_ids=[],
+        previous_visible_count=16,
+        previous_near_visible_count=0,
+        flow="recommend_next",
+        source=confirmation_source,
+        new_results=_records(old_ids),
+        new_result_ids=old_ids,
+        new_near_results=[],
+        new_near_result_ids=[],
+    )
+    new_ids = ["002", "007", "028"]
+    new_search_source = classify_result_context_source(
+        command_flow="find_events",
+        search_result_present=False,
+        agentic_response_present=False,
+        command_handled=True,
+        pending_handled=False,
+        flow="find_events",
+        previous_result_ids=after_confirmation.result_ids,
+        result_ids=new_ids,
+    )
+    after_new_search = transition_result_context(
+        previous_results=after_confirmation.results,
+        previous_result_ids=after_confirmation.result_ids,
+        previous_near_results=[],
+        previous_near_result_ids=[],
+        previous_visible_count=after_confirmation.visible_count,
+        previous_near_visible_count=0,
+        flow="find_events",
+        source=new_search_source,
+        new_results=_records(new_ids),
+        new_result_ids=new_ids,
+        new_near_results=[],
+        new_near_result_ids=[],
+    )
+
+    assert after_confirmation.visible_count == 16
+    assert after_new_search.result_ids == new_ids
+    assert after_new_search.visible_count == 3
