@@ -223,3 +223,6 @@ class AgenticResponse:
     writer_skipped: bool = False
     strong_event_ids: tuple[str, ...] = ()
     reference_event_ids: tuple[str, ...] = ()
+    # The exact deterministic search specifications executed for this turn.
+    # This is public filter metadata, not planner chain-of-thought.
+    search_specs: tuple[dict[str, Any], ...] = ()

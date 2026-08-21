@@ -20,6 +20,7 @@ import experience_preferences
 
 MAX_TRACE_RESULTS = 100
 MAX_TRACE_EVIDENCE_PER_EVENT = 24
+MAX_TRACE_SEARCH_SPECS = 8
 
 
 def _compact(value: str) -> str:
@@ -103,6 +104,15 @@ _DETAIL_WORDS = (
     "公式",
     "本物",
 )
+_POSITION_REFERENCE_MARKERS = (
+    "番目",
+    "最初",
+    "最後",
+    "第一",
+    "第1",
+    "第2",
+    "第3",
+)
 _DOMAIN_BOUNDARY_MARKERS = (
     "株価",
     "おすすめの株",
@@ -120,6 +130,12 @@ def is_search_explanation_query(query: str) -> bool:
     """Recognize a question about how the immediately preceding search ran."""
 
     compact = _compact(query)
+    # Detail/FAQ wording about a referenced event must stay on the local
+    # event-fact path, even when it contains the generic word "条件".
+    if _has_any(compact, ("このイベント", "そのイベント")) and _has_any(
+        compact, _DETAIL_WORDS
+    ) and not _has_any(compact, ("選定", "選ばれ", "入って", "根拠", "理由")):
+        return False
     # An explicit event reference makes this an item-level question when the
     # wording asks why that event was selected.  Keep the broader "基準" and
     # "条件" families as search-level explanations.
@@ -138,8 +154,21 @@ def is_result_explanation_query(query: str) -> bool:
     compact = _compact(query)
     if is_search_explanation_query(compact):
         return False
+    if (
+        _has_any(compact, ("このイベント", "そのイベント"))
+        and _has_any(compact, ("なぜ", "なんで", "どうして"))
+        and _has_any(compact, _DETAIL_WORDS)
+        and not _has_any(compact, ("選", "入", "根拠", "理由"))
+    ):
+        return False
     has_reason = _has_any(compact, _RESULT_EXPLANATION_MARKERS) or "なぜ" in compact
     return has_reason and _has_any(compact, _REFERENCE_MARKERS)
+
+
+def has_explicit_position_reference(query: str) -> bool:
+    """Return true when a query names a specific result position."""
+
+    return _has_any(_compact(query), _POSITION_REFERENCE_MARKERS)
 
 
 def is_ambiguous_reference_query(query: str) -> bool:
@@ -167,6 +196,7 @@ class SearchContext:
     result_ids: list[str]
     selection_policy: str
     result_evidence: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    search_specs: list[dict[str, Any]] = field(default_factory=list)
     total_matches: int = 0
     created_at: str = ""
 
@@ -188,6 +218,12 @@ class SearchContext:
                 if isinstance(items, list)
                 and all(isinstance(item, Mapping) for item in items)
             } if isinstance(raw_evidence, Mapping) else {}
+            raw_specs = value.get("search_specs", [])
+            search_specs = [
+                dict(spec)
+                for spec in raw_specs[:MAX_TRACE_SEARCH_SPECS]
+                if isinstance(spec, Mapping)
+            ] if isinstance(raw_specs, list) else []
             conditions = value.get("normalized_conditions", {})
             if not isinstance(conditions, Mapping):
                 conditions = {}
@@ -198,6 +234,7 @@ class SearchContext:
                 result_ids=result_ids,
                 selection_policy=str(value.get("selection_policy", "")),
                 result_evidence=evidence,
+                search_specs=search_specs,
                 total_matches=int(value.get("total_matches", len(result_ids))),
                 created_at=str(value.get("created_at", "")),
             )
@@ -224,7 +261,11 @@ def _filters_dict(filters: Any) -> dict[str, Any]:
 
 
 def _present_conditions(filters: Mapping[str, Any]) -> dict[str, Any]:
-    ignored = {"intent", "entity", "requested_field", "invalid_date", "keywords"}
+    ignored = {
+        "intent", "entity", "requested_field", "invalid_date", "keywords",
+        "event_id", "event_ids", "reference_date", "selected_event_id",
+        "selected_end_override", "query",
+    }
     result: dict[str, Any] = {}
     for key, value in filters.items():
         if key in ignored or value in (None, False, "", [], ()):
@@ -238,8 +279,10 @@ def _condition_label(key: str, value: Any) -> str:
         "dates": "日付",
         "city": "市町",
         "city_groups": "市町",
+        "municipalities": "市町",
         "region": "地域",
         "region_groups": "地域",
+        "regions": "地域",
         "genres": "ジャンル",
         "genre_groups": "ジャンル",
         "child_friendly": "子ども向け",
@@ -300,6 +343,22 @@ def _fact_evidence(event: Mapping[str, Any], filters: Mapping[str, Any]) -> list
                         "evidence_value": None,
                     }
                 )
+            elif concept_field == "experience_excluded" and match is False:
+                profile = experience_matcher.experience_profile(event) or {}
+                evidence.append(
+                    {
+                        "condition": str(concept_id),
+                        "evidence_level": "explicit",
+                        "evidence_source": "data_model_v3.experience_profile",
+                        "evidence_value": {
+                            "matched": False,
+                            "posture": profile.get("posture"),
+                            "seating": profile.get("seating"),
+                            "mobility_load": profile.get("mobility_load"),
+                            "engagement_modes": profile.get("engagement_modes", []),
+                        },
+                    }
+                )
 
     # Keep general filter evidence factual and compact.  The filter itself is
     # the result of the trusted deterministic search; the value below points
@@ -307,7 +366,9 @@ def _fact_evidence(event: Mapping[str, Any], filters: Mapping[str, Any]) -> list
     field_map = {
         "dates": "日時",
         "city_groups": "市町",
+        "municipalities": "市町",
         "region_groups": "地域",
+        "regions": "地域",
         "genres": "ジャンル",
         "venue": "屋内/屋外",
         "entry_free": "料金",
@@ -341,10 +402,13 @@ def build_search_context(
     result_ids: Sequence[Any] | None = None,
     total_matches: int | None = None,
     selection_policy: str = "deterministic_hard_filters_then_existing_ranker",
+    search_specs: Sequence[Mapping[str, Any]] | None = None,
 ) -> SearchContext:
     """Create a bounded trace from the same filters and records used to search."""
 
-    filters_dict = _filters_dict(filters)
+    bounded_specs = _sanitize_search_specs(search_specs)
+    spec_filters = _merge_search_spec_filters(bounded_specs)
+    filters_dict = spec_filters or _filters_dict(filters)
     ids = [str(value) for value in (result_ids or (_event_id(event) for event in events))]
     ids = list(dict.fromkeys(ids))[:MAX_TRACE_RESULTS]
     evidence = {
@@ -359,6 +423,7 @@ def build_search_context(
         result_ids=ids,
         selection_policy=selection_policy,
         result_evidence=evidence,
+        search_specs=bounded_specs,
         total_matches=int(total_matches if total_matches is not None else len(ids)),
         created_at=datetime.now(timezone.utc).isoformat(),
     )
@@ -377,10 +442,62 @@ def _experience_labels(conditions: Mapping[str, Any]) -> list[str]:
     return labels
 
 
+def _sanitize_search_specs(values: Sequence[Mapping[str, Any]] | None) -> list[dict[str, Any]]:
+    sanitized: list[dict[str, Any]] = []
+    for raw in list(values or [])[:MAX_TRACE_SEARCH_SPECS]:
+        if not isinstance(raw, Mapping):
+            continue
+        raw_filters = raw.get("filters", {})
+        if not isinstance(raw_filters, Mapping):
+            continue
+        sanitized.append(
+            {
+                "search_id": str(raw.get("search_id", "")),
+                "tool": str(raw.get("tool", "search_events")),
+                "purpose": str(raw.get("purpose", "exact")),
+                "filters": _present_conditions(dict(raw_filters)),
+                "relaxed": bool(raw.get("relaxed", False)),
+                "relaxed_fields": [str(value) for value in raw.get("relaxed_fields", [])]
+                if isinstance(raw.get("relaxed_fields", []), (list, tuple)) else [],
+            }
+        )
+    return sanitized
+
+
+def _merge_search_spec_filters(specs: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    merged: dict[str, Any] = {}
+    for spec in specs:
+        filters = spec.get("filters", {})
+        if not isinstance(filters, Mapping):
+            continue
+        for key, value in filters.items():
+            if value in (None, False, "", [], ()):
+                continue
+            if isinstance(value, (list, tuple)):
+                current = merged.setdefault(str(key), [])
+                if not isinstance(current, list):
+                    current = [current]
+                    merged[str(key)] = current
+                for item in value:
+                    if item not in current:
+                        current.append(item)
+            else:
+                merged.setdefault(str(key), value)
+    return _present_conditions(merged)
+
+
+def _effective_conditions(context: SearchContext) -> dict[str, Any]:
+    if context.search_specs:
+        actual = _merge_search_spec_filters(context.search_specs)
+        if actual:
+            return actual
+    return context.normalized_conditions
+
+
 def render_search_explanation(context: SearchContext | None) -> str:
     if context is None or not context.result_ids:
         return "直前の検索条件を確認できませんでした。もう一度、探したい条件を教えてみて。"
-    conditions = context.normalized_conditions
+    conditions = _effective_conditions(context)
     labels = [_condition_label(key, value) for key, value in conditions.items()]
     experience_labels = _experience_labels(conditions)
     if "座って楽しめる" in experience_labels:
@@ -407,6 +524,8 @@ def _format_evidence(evidence: Mapping[str, Any]) -> str:
             "体験特性に「主に着席」と記録され、"
             f"座席情報は「{value.get('seating', '不明')}」"
         )
+    if isinstance(value, Mapping) and value.get("matched") is False:
+        return f"体験特性が除外条件「{condition}」に一致しないと確認できる"
     return f"{evidence.get('evidence_source', 'イベント情報')}に「{value}」と記録されている"
 
 
@@ -450,6 +569,7 @@ __all__ = [
     "build_search_context",
     "is_ambiguous_reference_query",
     "is_domain_out_of_scope",
+    "has_explicit_position_reference",
     "is_result_explanation_query",
     "is_search_explanation_query",
     "reference_event",

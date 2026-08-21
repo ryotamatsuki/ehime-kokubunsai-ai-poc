@@ -2183,13 +2183,12 @@ for message in st.session_state.messages:
     else:
         _render_user_message(str(message.get("content", "")))
 
-if st.session_state.last_pair_results and not st.session_state.get("suppress_result_cards"):
-    _render_pair_results(st.session_state.last_pair_results)
-
 recovery_display_results = st.session_state.get("recovery_display_results")
-if recovery_display_results is not None and not st.session_state.get("suppress_result_cards"):
+if recovery_display_results is not None:
     st.subheader("対象のイベント")
     _render_event_grid(list(recovery_display_results), scope="exact")
+elif st.session_state.last_pair_results and not st.session_state.get("suppress_result_cards"):
+    _render_pair_results(st.session_state.last_pair_results)
 elif (
     st.session_state.last_results
     and not st.session_state.last_pair_results
@@ -2537,6 +2536,7 @@ if prompt:
             results,
             result_ids=agentic_response.exact_event_ids or _event_ids(results),
             total_matches=agentic_response.total_matches,
+            search_specs=agentic_response.search_specs,
         )
 
     if command_handled:
@@ -3008,6 +3008,12 @@ if prompt:
             },
             "writer_skipped": agentic_response.writer_skipped,
         }
+    if route.action_type == "scope_search":
+        # A domain/security fallback must not leave its old search contract
+        # available to a later refinement turn.
+        st.session_state.last_filters = None
+        st.session_state.last_plan = None
+        st.session_state.last_search_context = None
     if search_context_for_turn is not None and result_context.replace_result_set:
         st.session_state.last_search_context = search_context_for_turn.to_dict()
     st.session_state.last_pair_results = (

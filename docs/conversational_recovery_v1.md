@@ -78,7 +78,7 @@ from general world knowledge.
 
 ## Tests and limitations
 
-`tests/run_conversational_recovery_qa.py` contains 100 deterministic cases:
+`tests/run_conversational_recovery_qa.py` contains 105 deterministic cases:
 20 search explanations, 20 result explanations, 20 refinements, 15 FAQ/detail
 recovery cases, 10 clarification cases, 10 domain-boundary cases, and 5
 context lifecycle checks.
