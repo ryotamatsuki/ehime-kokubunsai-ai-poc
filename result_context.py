@@ -92,6 +92,8 @@ def should_replace_result_set(*, flow: str | None, source: str | None) -> bool:
 
     normalized_flow = str(flow or "").strip()
     normalized_source = str(source or "").strip()
+    if normalized_source == "preserving":
+        return False
     if normalized_source in {"legacy_search", "agentic"}:
         return True
     if normalized_flow in RESULT_SET_PRESERVING_FLOWS:

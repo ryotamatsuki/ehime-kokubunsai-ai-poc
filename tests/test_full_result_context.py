@@ -244,3 +244,17 @@ def test_direct_detail_without_prior_search_creates_a_one_event_context() -> Non
 def test_named_legacy_detail_is_a_new_search_but_command_detail_preserves() -> None:
     assert should_replace_result_set(flow="event_detail", source="legacy_search")
     assert not should_replace_result_set(flow="event_detail", source="command")
+
+
+def test_preserving_recommendation_confirmation_keeps_the_current_page() -> None:
+    ids = [f"{index:03d}" for index in range(1, 29)]
+    update = _transition(
+        ids,
+        flow="recommend_next",
+        source="preserving",
+        new_ids=ids,
+        visible_count=16,
+    )
+    assert not update.replace_result_set
+    assert update.result_ids == ids
+    assert update.visible_count == 16

@@ -2757,6 +2757,11 @@ if prompt:
         # follow-ups do not enter this branch and preserve the old context.
         context_source = "legacy_search"
         context_flow = turn_flow
+    elif (command_handled or pending_handled) and result_ids == previous_result_ids:
+        # Clarification/confirmation turns can carry a recommendation flow
+        # name while intentionally returning the previous cards unchanged.
+        context_source = "preserving"
+        context_flow = turn_flow
     else:
         context_source = "router"
         context_flow = turn_flow
@@ -2866,6 +2871,11 @@ if prompt:
         st.session_state.selected_event_id = (
             str(results[0].get("id") or "") if len(results) == 1 else None
         )
+    elif result_context.replace_result_set:
+        # A new multi-event search/recommendation has no single selected
+        # event.  Do not let a stale event answer a later pronoun question.
+        st.session_state.selected_event = None
+        st.session_state.selected_event_id = None
     if pending_state_to_store is None:
         st.session_state.pop("pending_recommendation", None)
     else:
