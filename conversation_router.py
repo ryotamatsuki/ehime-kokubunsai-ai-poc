@@ -14,6 +14,7 @@ import event_details
 import event_recommendation
 import event_search
 import faq_search
+import conversation_recovery
 
 
 @dataclass(frozen=True)
@@ -25,6 +26,7 @@ class ConversationRoute:
     faq_match: faq_search.FAQMatch | None = None
     search_required: bool = False
     recommendation_mode: str | None = None
+    recovery_target: str | None = None
 
 
 def contains_named_event_context(query: str) -> bool:
@@ -69,7 +71,12 @@ def named_event_match(query: str) -> Mapping[str, Any] | None:
 
 def is_pronoun_reference(query: str) -> bool:
     normalized = event_search.normalize_query(query)
-    return "それ" in normalized or "そのイベント" in normalized
+    if event_search.is_refinement_query(normalized):
+        return False
+    return any(
+        marker in normalized
+        for marker in ("それ", "そのイベント", "これ", "このイベント", "さっきの", "今の")
+    )
 
 
 def is_detail_followup_without_new_search(
@@ -186,6 +193,29 @@ def route_conversation(
     reference_index = event_search.resolve_reference_index(query, len(last_results))
     named_event = named_event_match(query)
 
+    # Conversation-meta questions are evaluated before FAQ and before the
+    # generative Command path.  Their answer must use the prior deterministic
+    # search context, not a new search or a generic FAQ no-hit response.
+    if conversation_recovery.is_search_explanation_query(query):
+        return ConversationRoute(
+            "explain_search",
+            faq_match=faq_match,
+            recovery_target="last_search",
+        )
+    if conversation_recovery.is_result_explanation_query(query):
+        target = None
+        if reference_index is not None and 0 <= reference_index < len(last_results):
+            target = last_results[reference_index]
+        elif selected_event is not None and conversation_recovery.is_ambiguous_reference_query(query):
+            target = selected_event
+        return ConversationRoute(
+            "explain_result",
+            reference_index=reference_index,
+            selected_event=target,
+            faq_match=faq_match,
+            recovery_target="result",
+        )
+
     if event_recommendation.is_next_query(query):
         target = _resolve_recommendation_seed(
             query, last_results, selected_event, named_event, reference_index
@@ -228,6 +258,25 @@ def route_conversation(
             recommendation_mode="similar",
         )
 
+    # A refinement of an existing result set outranks a broad FAQ similarity
+    # match such as "無料だけ".  The deterministic search path will inherit
+    # the prior filters and constrain the previous ordered result set.
+    if last_results and event_search.is_refinement_query(query):
+        return ConversationRoute("search", faq_match=faq_match, search_required=True)
+
+    # A reference without an available result set must be clarified rather
+    # than delegated to a new search, which could fabricate a target.
+    if (
+        reference_index is not None
+        or conversation_recovery.is_ambiguous_reference_query(query)
+    ) and not last_results and selected_event is None:
+        return ConversationRoute(
+            "clarify_reference",
+            reference_index=reference_index,
+            faq_match=faq_match,
+            recovery_target="missing_context",
+        )
+
     if last_results and (reference_index is not None or is_pronoun_reference(query)):
         target = None
         if reference_index is not None and 0 <= reference_index < len(last_results):
@@ -259,7 +308,10 @@ def route_conversation(
             return ConversationRoute("general_faq", faq_match=faq_match)
         return ConversationRoute("nearby", faq_match=faq_match)
 
-    if event_search.classify_intent(query) in {"injection", "out_of_scope"}:
+    if (
+        event_search.classify_intent(query) in {"injection", "out_of_scope"}
+        or conversation_recovery.is_domain_out_of_scope(query)
+    ):
         return ConversationRoute("scope_search", faq_match=faq_match, search_required=True)
 
     if is_general_faq_context(query, faq_match, reference_date):

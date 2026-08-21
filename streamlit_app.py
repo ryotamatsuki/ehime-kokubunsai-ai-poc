@@ -22,6 +22,7 @@ import event_details
 import event_recommendation
 import experience_preferences
 import recommendation_pending
+import conversation_recovery
 from agent_planner import ModalConfig
 from conversation_router import route_conversation
 from app_config import (
@@ -1475,7 +1476,13 @@ def _render_command_outcome(
     events = list(outcome.events)
     near_events = list(outcome.near_events)
     selected_event: dict[str, Any] | None = events[0] if len(events) == 1 else None
-    parsed_experience = event_search.parse_query(prompt)
+    # Explain an executed Command from its trusted filters, not by parsing the
+    # natural-language prompt a second time.  This keeps the response tied to
+    # the actual deterministic search contract.
+    outcome_filters = outcome.filters if isinstance(outcome.filters, Mapping) else {}
+    experience_required = list(outcome_filters.get("experience_required", []) or [])
+    experience_preferred = list(outcome_filters.get("experience_preferred", []) or [])
+    experience_excluded = list(outcome_filters.get("experience_excluded", []) or [])
 
     if outcome.flow == "event_detail":
         answer, selected_event = _command_detail_answer(
@@ -1512,23 +1519,23 @@ def _render_command_outcome(
             pending_state=None,
         )
 
-    if parsed_experience.experience_required or parsed_experience.experience_preferred or parsed_experience.experience_excluded:
+    if experience_required or experience_preferred or experience_excluded:
         total = outcome.total_matches if outcome.total_matches is not None else len(events)
         if events:
             answer = experience_preferences.render_result_message(
                 total,
-                required=parsed_experience.experience_required,
-                preferred=parsed_experience.experience_preferred,
-                excluded=parsed_experience.experience_excluded,
+                required=experience_required,
+                preferred=experience_preferred,
+                excluded=experience_excluded,
             )
         else:
             answer = experience_preferences.render_result_message(
                 0,
-                required=parsed_experience.experience_required,
-                preferred=parsed_experience.experience_preferred,
-                excluded=parsed_experience.experience_excluded,
+                required=experience_required,
+                preferred=experience_preferred,
+                excluded=experience_excluded,
             )
-            if parsed_experience.experience_required or parsed_experience.experience_excluded:
+            if experience_required or experience_excluded:
                 answer += " 条件を広げる場合は、立ったり歩いたりするイベントを含めてよいか教えてね。"
     elif outcome.flow == "unsupported":
         # Security/out-of-scope guards are deterministic messages from the
@@ -2042,6 +2049,9 @@ def _reset() -> None:
         "selected_event",
         "selected_event_id",
         "last_plan",
+        "last_search_context",
+        "suppress_result_cards",
+        "recovery_display_results",
         "last_query",
         "feedback",
         "pending_prompt",
@@ -2115,6 +2125,12 @@ if "selected_event_id" not in st.session_state:
     st.session_state.selected_event_id = None
 if "last_plan" not in st.session_state:
     st.session_state.last_plan = None
+if "last_search_context" not in st.session_state:
+    st.session_state.last_search_context = None
+if "suppress_result_cards" not in st.session_state:
+    st.session_state.suppress_result_cards = False
+if "recovery_display_results" not in st.session_state:
+    st.session_state.recovery_display_results = None
 if "last_pair_results" not in st.session_state:
     st.session_state.last_pair_results = []
 
@@ -2167,14 +2183,22 @@ for message in st.session_state.messages:
     else:
         _render_user_message(str(message.get("content", "")))
 
-if st.session_state.last_pair_results:
+if st.session_state.last_pair_results and not st.session_state.get("suppress_result_cards"):
     _render_pair_results(st.session_state.last_pair_results)
 
-if st.session_state.last_results and not st.session_state.last_pair_results:
+recovery_display_results = st.session_state.get("recovery_display_results")
+if recovery_display_results is not None and not st.session_state.get("suppress_result_cards"):
+    st.subheader("対象のイベント")
+    _render_event_grid(list(recovery_display_results), scope="exact")
+elif (
+    st.session_state.last_results
+    and not st.session_state.last_pair_results
+    and not st.session_state.get("suppress_result_cards")
+):
     st.subheader("条件に合うイベント")
     _render_event_grid(st.session_state.last_results, scope="exact")
 
-if st.session_state.last_near_results:
+if st.session_state.last_near_results and not st.session_state.get("suppress_result_cards"):
     relaxed = st.session_state.last_relaxed_condition or "一部の条件"
     st.subheader(f"参考候補（「{relaxed}」を外した場合）")
     st.caption("上の検索結果には含めていません。条件を緩めた候補として表示しています。")
@@ -2243,6 +2267,7 @@ if prompt:
     selected_event: dict[str, object] | None = None
     filters: event_search.SearchFilters | None = None
     search_result: event_search.SearchResult | None = None
+    search_context_for_turn: conversation_recovery.SearchContext | None = None
     exact_result_count: int | None = None
     recommendation_result_count: int | None = None
     pair_result_count: int | None = None
@@ -2265,6 +2290,9 @@ if prompt:
     prefer_router_reference = route.action_type in {
         "reference_followup",
         "detail_followup",
+        "explain_search",
+        "explain_result",
+        "clarify_reference",
     }
     detail_field = route.detail_field
     pending_decision = recommendation_pending.PendingDecision(False)
@@ -2306,6 +2334,11 @@ if prompt:
     command_handled = False
     command_pending_to_store: dict[str, Any] | None = active_command_pending
     command_state = _command_state(previous_results, active_command_pending)
+    previous_search_context = conversation_recovery.SearchContext.from_value(
+        st.session_state.get("last_search_context")
+    )
+    suppress_cards_for_turn = False
+    recovery_display_results_for_turn: list[dict[str, Any]] | None = None
 
     if not pending_handled:
         if quick_action_command is not None:
@@ -2498,6 +2531,13 @@ if prompt:
             agent_orchestrator.humanize_relaxed_fields(agentic_response.relaxed_fields)
         ) or None
         filters = parsed_for_agentic
+        search_context_for_turn = conversation_recovery.build_search_context(
+            prompt,
+            filters,
+            results,
+            result_ids=agentic_response.exact_event_ids or _event_ids(results),
+            total_matches=agentic_response.total_matches,
+        )
 
     if command_handled:
         # The Command path has already executed its deterministic Flow and
@@ -2519,6 +2559,22 @@ if prompt:
         near_results = list(command_render.near_results)
         relaxed_condition = command_render.relaxed_condition
         selected_event = command_render.selected_event
+        if command_outcome is not None and command_outcome.flow in {
+            "find_events",
+            "count_events",
+            "recommend_next",
+            "recommend_similar",
+            "plan_event_pair",
+        }:
+            command_ids = list(command_outcome.all_event_ids) or _event_ids(results)
+            trace_events = _events_for_ids(command_ids) if command_ids else list(results)
+            search_context_for_turn = conversation_recovery.build_search_context(
+                prompt,
+                command_outcome.filters,
+                trace_events,
+                result_ids=command_ids,
+                total_matches=command_outcome.total_matches,
+            )
     elif pending_handled:
         if pending_decision.event is not None:
             selected_event = dict(pending_decision.event)
@@ -2545,6 +2601,35 @@ if prompt:
         # Agentic Search already produced the deterministic result set and the
         # Writer language above.  Event cards remain rendered from events.json.
         selected_event = results[0] if len(results) == 1 else None
+    elif route.action_type == "explain_search":
+        answer = conversation_recovery.render_search_explanation(previous_search_context)
+        results = previous_results
+        suppress_cards_for_turn = True
+    elif route.action_type == "explain_result":
+        selected_event = (
+            dict(route.selected_event)
+            if isinstance(route.selected_event, Mapping)
+            else None
+        )
+        if selected_event is None and route.reference_index is not None:
+            if 0 <= route.reference_index < len(previous_results):
+                selected_event = dict(previous_results[route.reference_index])
+        answer = conversation_recovery.render_result_explanation(
+            previous_search_context,
+            selected_event,
+            query=prompt,
+        )
+        results = previous_results
+        suppress_cards_for_turn = True
+        if selected_event is not None:
+            recovery_display_results_for_turn = [selected_event]
+    elif route.action_type == "clarify_reference":
+        answer = (
+            "まだ参照できるイベント一覧がないけん、どのイベントのことか分からないよ。"
+            "条件かイベント名を教えてみて。"
+        )
+        results = previous_results
+        suppress_cards_for_turn = True
     elif route.action_type == "reference_followup":
         # Ordinals and pronouns resolve against the last exact result set.
         # Participation facts are answered locally and never sent to Modal.
@@ -2570,6 +2655,7 @@ if prompt:
     elif route.action_type == "recommend_next_without_selection":
         answer = "まずイベントを1件選んでから、「このあと何か行ける？」と聞いてみて。"
         results = previous_results
+        suppress_cards_for_turn = True
     elif route.action_type == "recommend_next":
         selected_event = dict(route.selected_event) if route.selected_event is not None else None
         if selected_event is None:
@@ -2618,6 +2704,7 @@ if prompt:
     elif route.action_type == "recommend_similar_without_selection":
         answer = "まず基準にするイベントを1件選んでみて。"
         results = previous_results
+        suppress_cards_for_turn = True
     elif route.action_type == "recommend_similar":
         selected_event = dict(route.selected_event) if route.selected_event is not None else None
         source_events = event_search.load_events()
@@ -2641,15 +2728,19 @@ if prompt:
             results = list(recommendation.events) or previous_results
     elif route.action_type == "nearby":
         answer = NEARBY_MESSAGE
+        suppress_cards_for_turn = True
     elif route.action_type == "scope_search":
         search_result = _search_result(prompt)
         exact_result_count = search_result.total_matches
         answer = search_result.message or GENERIC_SCOPE_MESSAGE
+        suppress_cards_for_turn = True
     elif route.action_type == "general_faq":
         answer = route.faq_match.answer if route.faq_match is not None else GENERIC_SCOPE_MESSAGE
         results = previous_results
+        suppress_cards_for_turn = True
     elif route.action_type == "generic_scope":
         answer = GENERIC_SCOPE_MESSAGE
+        suppress_cards_for_turn = True
     else:
         inherit_previous = event_search.is_refinement_query(prompt) and bool(
             st.session_state.get("last_filters")
@@ -2665,6 +2756,15 @@ if prompt:
         results = list(search_result.events)
         near_results = list(search_result.near_matches)
         relaxed_condition = search_result.relaxed_condition
+        search_context_for_turn = conversation_recovery.build_search_context(
+            prompt,
+            filters,
+            _events_for_ids(search_result.all_event_ids)
+            if search_result.all_event_ids
+            else results,
+            result_ids=search_result.all_event_ids or _event_ids(results),
+            total_matches=search_result.total_matches,
+        )
         if not results:
             answer = search_result.message or NO_RESULT_MESSAGE
         elif filters.intent == "count":
@@ -2908,6 +3008,8 @@ if prompt:
             },
             "writer_skipped": agentic_response.writer_skipped,
         }
+    if search_context_for_turn is not None and result_context.replace_result_set:
+        st.session_state.last_search_context = search_context_for_turn.to_dict()
     st.session_state.last_pair_results = (
         list(command_render.pair_results)
         if command_handled and command_render is not None
@@ -2938,6 +3040,8 @@ if prompt:
             st.session_state.pop("pending_command", None)
         else:
             st.session_state.pending_command = command_pending_to_store
+    st.session_state.suppress_result_cards = suppress_cards_for_turn
+    st.session_state.recovery_display_results = recovery_display_results_for_turn
     st.session_state.last_query = prompt
     st.session_state.feedback = None
     st.rerun()

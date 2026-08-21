@@ -42,6 +42,9 @@ RESULT_SET_PRESERVING_FLOWS = frozenset(
         "nearby",
         "recommend_next_without_selection",
         "recommend_similar_without_selection",
+        "explain_search",
+        "explain_result",
+        "clarify_reference",
     }
 )
 
