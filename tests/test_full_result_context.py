@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from app_config import POC_REFERENCE_DATE
+from conversation_router import route_conversation
+import event_search
 from command_models import CommandPlan, CommandSlots
 from command_orchestrator import CommandOrchestrator
 from result_context import (
@@ -91,6 +94,28 @@ def test_event_detail_preserves_the_full_search_context_across_turns() -> None:
     )
     assert next_detail.status == "ok"
     assert next_detail.events[0]["id"] == first.all_event_ids[20]
+
+
+def test_ordinal_place_question_uses_the_router_reference_path() -> None:
+    search = event_search.search_events(
+        "子どもと楽しめるイベント",
+        reference_date=POC_REFERENCE_DATE,
+    )
+    route = route_conversation(
+        "21番目はどこ？",
+        search.events,
+        None,
+        None,
+        POC_REFERENCE_DATE,
+    )
+
+    assert route.action_type == "reference_followup"
+    assert route.reference_index == 20
+    assert route.selected_event is not None
+    assert route.selected_event["id"] == search.all_event_ids[20]
+    assert event_search.attribute_answer(route.selected_event, "place").endswith(
+        "愛媛県県民文化会館（松山市）です。"
+    )
 
 
 def test_selected_event_is_separate_from_the_preserved_result_set() -> None:

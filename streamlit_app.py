@@ -2225,6 +2225,14 @@ if prompt:
         st.session_state.get("last_filters"),
         POC_REFERENCE_DATE,
     )
+    # Ordinal/pronoun follow-ups have already been resolved deterministically
+    # against the full previous result set.  Keep them on the router path so a
+    # generative Command plan cannot reinterpret "21番目はどこ？" as a
+    # recommendation or date question.
+    prefer_router_reference = route.action_type in {
+        "reference_followup",
+        "detail_followup",
+    }
     detail_field = route.detail_field
     pending_decision = recommendation_pending.PendingDecision(False)
     pending_handled = False
@@ -2381,17 +2389,19 @@ if prompt:
                     st.session_state.pop("pending_command", None)
                     active_command_pending = None
                     command_pending_to_store = None
-                    command_outcome = _call_new_command(
-                        prompt,
-                        state=_command_state(previous_results),
-                        modal_config=ModalConfig(modal_url, modal_key, modal_secret),
-                    )
+                    if not prefer_router_reference:
+                        command_outcome = _call_new_command(
+                            prompt,
+                            state=_command_state(previous_results),
+                            modal_config=ModalConfig(modal_url, modal_key, modal_secret),
+                        )
         else:
-            command_outcome = _call_new_command(
-                prompt,
-                state=command_state,
-                modal_config=ModalConfig(modal_url, modal_key, modal_secret),
-            )
+            if not prefer_router_reference:
+                command_outcome = _call_new_command(
+                    prompt,
+                    state=command_state,
+                    modal_config=ModalConfig(modal_url, modal_key, modal_secret),
+                )
 
         if command_outcome is not None:
             command_handled = True
