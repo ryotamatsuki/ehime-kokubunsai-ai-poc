@@ -207,6 +207,8 @@ class AgenticResponse:
     total_matches: int
     exact_events: list[dict[str, Any]] = field(default_factory=list)
     relaxed_events: list[dict[str, Any]] = field(default_factory=list)
+    exact_event_ids: tuple[str, ...] = ()
+    relaxed_event_ids: tuple[str, ...] = ()
     lead: str = ""
     follow_up: str | None = None
     relaxed_fields: tuple[str, ...] = ()

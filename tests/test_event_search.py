@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from app_config import MAX_SEARCH_RESULTS, POC_REFERENCE_DATE, REGION_CITIES
+from app_config import POC_REFERENCE_DATE, REGION_CITIES
 from event_search import (
     base_entry_fee,
     event_region,
@@ -125,13 +125,13 @@ def test_region_and_genre_filters_are_applied_together(events) -> None:
 
 def test_child_and_elementary_school_queries_only_return_child_events(events) -> None:
     result = search_events("小学3年生と楽しめるもの", events, POC_REFERENCE_DATE)
-    assert len(result.events) == MAX_SEARCH_RESULTS
+    assert len(result.events) == result.total_matches == len(result.all_event_ids)
     assert all(event["子ども向け"] is True for event in result.events)
 
 
 def test_rain_query_requires_an_indoor_component_and_prioritizes_pure_indoor(events) -> None:
     result = search_events("雨でも楽しめるもの", events, POC_REFERENCE_DATE)
-    assert len(result.events) == MAX_SEARCH_RESULTS
+    assert len(result.events) == result.total_matches == len(result.all_event_ids)
     assert all("屋内" in str(event["屋内/屋外"]) for event in result.events)
     modes = [str(event["屋内/屋外"]) for event in result.events]
     first_mixed = next(
@@ -221,10 +221,10 @@ def test_region_mapping_covers_all_20_municipalities(events) -> None:
     assert {event_region(event) for event in events} == {"東予", "中予", "南予"}
 
 
-def test_search_result_limit_is_hard_capped_at_eight(events) -> None:
+def test_search_result_limit_keeps_the_complete_bounded_set(events) -> None:
     result = search_events("子どもと楽しむ", events, POC_REFERENCE_DATE, limit=100)
-    assert len(result.events) == MAX_SEARCH_RESULTS
-    assert result.total_matches >= MAX_SEARCH_RESULTS
+    assert len(result.events) == result.total_matches == len(result.all_event_ids)
+    assert result.total_matches == 28
 
 
 def test_follow_up_can_inherit_previous_structured_filters(events) -> None:

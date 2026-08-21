@@ -26,7 +26,11 @@ from agent_planner import (  # noqa: E402
     validate_writer_output,
 )
 from agent_tools import execute_detail_lookup, execute_structured_search, execute_tool  # noqa: E402
-from app_config import POC_REFERENCE_DATE  # noqa: E402
+from app_config import (  # noqa: E402
+    MAX_RESULT_SET_SIZE,
+    MAX_WRITER_CANDIDATES,
+    POC_REFERENCE_DATE,
+)
 from conversation_router import route_conversation  # noqa: E402
 from event_search import load_events, parse_query  # noqa: E402
 
@@ -39,7 +43,8 @@ def check(condition: bool, message: str) -> None:
 EVENTS = load_events()
 
 
-# 1. Count is calculated before the eight-card display limit.
+# 1. Count and the complete bounded result set are both deterministic.  The
+#    UI/Writer budgets are applied later, at their respective boundaries.
 indoor_spec = SearchSpec(
     "s1",
     "count_events",
@@ -48,7 +53,7 @@ indoor_spec = SearchSpec(
 )
 indoor = execute_structured_search(indoor_spec, EVENTS)
 check(indoor.total_matches == 14, "indoor count must be 14")
-check(len(indoor.events) == 8, "display candidates must be capped at 8")
+check(len(indoor.events) == indoor.total_matches, "tool result events were capped before UI pagination")
 check(len(indoor.all_event_ids) == 14, "all matching IDs must be retained")
 
 
@@ -255,7 +260,8 @@ for previous_filters, changed_filters, relaxed_fields, label in (
     )
     check(validate_replan_plan(invalid_weaken, previous) is None, f"non-relaxing {label} was accepted")
 
-# Multiple exact tool results still use one bounded card budget.
+# Multiple exact tool results retain the complete bounded set while the
+# Writer payload stays within its separate candidate budget.
 multi_plan = SearchPlan(
     "discover",
     "list",
@@ -270,7 +276,19 @@ bounded = handle_agentic_query(
     planner_request=lambda _context: multi_plan,
     writer_request=lambda _payload: None,
 )
-check(len(bounded.exact_events) <= 8 and len(bounded.exact_events) + len(bounded.relaxed_events) <= 8, "Agentic response exceeded the card budget")
+check(
+    len(bounded.exact_events) + len(bounded.relaxed_events) <= MAX_RESULT_SET_SIZE,
+    "Agentic response exceeded the result-set bound",
+)
+writer_payload = build_writer_payload(
+    "恐竜好きのイベント",
+    {"answer_type": "list", "exact_event_ids": [], "relaxed_event_ids": []},
+    bounded.exact_events + bounded.relaxed_events,
+)
+check(
+    len(writer_payload["candidate_ids"]) <= MAX_WRITER_CANDIDATES,
+    "Writer candidate budget was not enforced",
+)
 
 
 # 9. Tool names are fixed and no dynamic Python dispatch is needed.

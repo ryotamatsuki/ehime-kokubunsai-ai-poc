@@ -22,7 +22,13 @@ from command_generator import (
 )
 import event_search
 from agent_models import SearchPlan, SearchSpec, WriterOutput
-from app_config import CITY_ALIASES, GENRE_ALIASES, POC_REFERENCE_DATE, REGION_CITIES
+from app_config import (
+    CITY_ALIASES,
+    GENRE_ALIASES,
+    MAX_RESULT_SET_SIZE,
+    POC_REFERENCE_DATE,
+    REGION_CITIES,
+)
 
 
 MAX_PLAN_SEARCHES = 3
@@ -482,7 +488,7 @@ def request_search_plan(
         "state": {
             "reference_date": str(context.get("reference_date", POC_REFERENCE_DATE.isoformat())),
             "selected_event_id": context.get("selected_event_id"),
-            "last_result_ids": list(context.get("last_result_ids", []))[:20],
+            "last_result_ids": list(context.get("last_result_ids", []))[:MAX_RESULT_SET_SIZE],
             "last_filters": dict(context.get("last_filters") or {}),
         },
     }
@@ -510,7 +516,7 @@ def request_command_result(
     state = {
         "reference_date": context.get("reference_date", POC_REFERENCE_DATE.isoformat()),
         "selected_event_id": context.get("selected_event_id"),
-        "last_result_ids": list(context.get("last_result_ids", []))[:20],
+        "last_result_ids": list(context.get("last_result_ids", []))[:MAX_RESULT_SET_SIZE],
         "last_command": context.get("last_command"),
         "active_flow": context.get("active_flow"),
         "pending_slots": context.get("pending_slots"),

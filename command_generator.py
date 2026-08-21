@@ -23,6 +23,7 @@ from command_models import (
     MAX_VISIT_COUNT,
     validate_command_plan,
 )
+from app_config import MAX_RESULT_SET_SIZE
 from flow_registry import FLOW_REGISTRY, FlowSpec, render_flow_descriptions
 
 
@@ -181,6 +182,13 @@ def sanitize_command_state(raw_state: Any) -> dict[str, Any]:
         "pending_required_slots", "requested_slot",
     )
     state = {key: _safe_state_value(raw_state[key]) for key in allowed if key in raw_state}
+    result_ids = raw_state.get("last_result_ids")
+    if isinstance(result_ids, (list, tuple)):
+        state["last_result_ids"] = [
+            str(value).strip()
+            for value in result_ids[:MAX_RESULT_SET_SIZE]
+            if str(value).strip()
+        ]
     if len(json.dumps(state, ensure_ascii=False, separators=(",", ":"))) <= MAX_COMMAND_STATE_LENGTH:
         return state
     return {

@@ -22,7 +22,7 @@ import event_recommendation
 import event_search
 import faq_search
 from agent_models import SearchSpec, ToolResult
-from app_config import POC_REFERENCE_DATE
+from app_config import MAX_RESULT_SET_SIZE, POC_REFERENCE_DATE
 from command_generator import (
     CommandGenerationResult,
     DEFAULT_COMMAND_FORMAT,
@@ -40,8 +40,11 @@ from flow_registry import get_flow_spec, required_slots_for
 
 
 MAX_COMMAND_QUERY_LENGTH = 1200
-MAX_LAST_RESULT_IDS = 8
-MAX_RESULTS = 8
+# These are bounded data/state limits, not the first-page card count.
+MAX_LAST_RESULT_IDS = MAX_RESULT_SET_SIZE
+# Compatibility alias for intermediate adapters; result copying uses the
+# explicit result-set constant below.
+MAX_RESULTS = MAX_RESULT_SET_SIZE
 MAX_PAIR_RESULTS = 3
 DEFAULT_PAIR_BUFFER_MINUTES = 30
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
@@ -294,6 +297,8 @@ class CommandTurnResult:
     result: ToolResult | None = None
     events: list[dict[str, Any]] = field(default_factory=list)
     near_events: list[dict[str, Any]] = field(default_factory=list)
+    all_event_ids: list[str] = field(default_factory=list)
+    all_near_event_ids: list[str] = field(default_factory=list)
     pairs: list[EventPair] = field(default_factory=list)
     total_matches: int | None = None
     filters: dict[str, Any] | None = None
@@ -343,7 +348,10 @@ def _event_id(event: Mapping[str, Any]) -> str:
     return url.rsplit("/", 1)[-1] if url else ""
 
 
-def _copy_events(events: Sequence[Mapping[str, Any]], limit: int = MAX_RESULTS) -> list[dict[str, Any]]:
+def _copy_events(
+    events: Sequence[Mapping[str, Any]],
+    limit: int = MAX_RESULT_SET_SIZE,
+) -> list[dict[str, Any]]:
     return [dict(event) for event in list(events)[:limit]]
 
 
@@ -431,8 +439,8 @@ class DeterministicAdapters:
             if not previous_ids:
                 return (
                     ToolResult(
-                        search_id=result.search_id,
-                        purpose=result.purpose,
+                        search_id=spec.search_id,
+                        purpose=spec.purpose,
                         total_matches=0,
                         message="前回の検索結果がないため、その中からは絞り込めません。",
                     ),
@@ -1169,6 +1177,11 @@ class CommandOrchestrator:
                 message = result.message
         else:
             total_matches = len(events)
+        all_event_ids = (
+            list(result.all_event_ids)
+            if result is not None and result.all_event_ids
+            else [_event_id(event) for event in events[:MAX_RESULT_SET_SIZE]]
+        )
         latency = CommandLatency(
             generator_ms=generation_ms,
             execution_ms=execution_ms,
@@ -1181,6 +1194,7 @@ class CommandOrchestrator:
             status="ok",
             result=result,
             events=_copy_events(events),
+            all_event_ids=all_event_ids,
             pairs=list(pairs),
             total_matches=total_matches,
             filters=filters,
