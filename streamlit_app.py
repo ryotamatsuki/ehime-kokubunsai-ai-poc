@@ -47,6 +47,7 @@ from command_models import (
 from flow_registry import FLOW_REGISTRY
 from event_image_assets import event_image_path
 from result_pagination import next_visible_count, normalize_visible_count, visible_items
+from result_context import classify_result_context_source, transition_result_context
 from iyoshirube_ui import (
     EMOTION_NORMAL,
     EMOTION_THINKING,
@@ -690,6 +691,7 @@ def _command_state(
     pending_command: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     selected_event = st.session_state.get("selected_event") or {}
+    selected_event_id = st.session_state.get("selected_event_id") or selected_event.get("id")
     pending_plan = (
         pending_command.get("command")
         if pending_command and isinstance(pending_command.get("command"), Mapping)
@@ -697,7 +699,7 @@ def _command_state(
     )
     state: dict[str, Any] = {
         "reference_date": POC_REFERENCE_DATE.isoformat(),
-        "selected_event_id": str(selected_event.get("id") or "") or None,
+        "selected_event_id": str(selected_event_id or "") or None,
         "last_result_ids": list(
             st.session_state.get("last_result_ids") or _event_ids(previous_results)
         ),
@@ -2005,6 +2007,7 @@ def _reset() -> None:
         "last_relaxed_condition",
         "last_filters",
         "selected_event",
+        "selected_event_id",
         "last_plan",
         "last_query",
         "feedback",
@@ -2075,6 +2078,8 @@ if "last_filters" not in st.session_state:
     st.session_state.last_filters = None
 if "selected_event" not in st.session_state:
     st.session_state.selected_event = None
+if "selected_event_id" not in st.session_state:
+    st.session_state.selected_event_id = None
 if "last_plan" not in st.session_state:
     st.session_state.last_plan = None
 if "last_pair_results" not in st.session_state:
@@ -2223,6 +2228,7 @@ if prompt:
     detail_field = route.detail_field
     pending_decision = recommendation_pending.PendingDecision(False)
     pending_handled = False
+    pending_result_set_replaced = False
     pending_state_to_store: dict[str, str] | None = None
     pending_state = st.session_state.get("pending_recommendation")
     if pending_state:
@@ -2425,8 +2431,9 @@ if prompt:
     ):
         conversation_state = {
             "selected_event_id": (
-                st.session_state.get("selected_event", {}) or {}
-            ).get("id"),
+                st.session_state.get("selected_event_id")
+                or (st.session_state.get("selected_event", {}) or {}).get("id")
+            ),
             "last_result_ids": list(
                 st.session_state.get("last_result_ids") or _event_ids(previous_results)
             ),
@@ -2488,6 +2495,7 @@ if prompt:
                 answer = recommendation.message
                 recommendation_result_count = len(recommendation.events)
                 results = list(recommendation.events) or previous_results
+                pending_result_set_replaced = bool(recommendation.events)
         else:
             answer = "推薦条件を確認できませんでした。イベント名からもう一度探してみて。"
     elif agentic_response is not None:
@@ -2710,6 +2718,7 @@ if prompt:
         }
     )
     previous_result_ids = list(st.session_state.get("last_result_ids", []))
+    previous_near_results = list(st.session_state.get("last_near_results", []))
     previous_near_result_ids = list(st.session_state.get("last_near_result_ids", []))
     result_ids = _event_ids(results)
     near_result_ids = _event_ids(near_results)
@@ -2734,55 +2743,81 @@ if prompt:
         results = _events_for_ids(result_ids)
     if len(near_result_ids) > len(_event_ids(near_results)):
         near_results = _events_for_ids(near_result_ids)
+    if len(previous_result_ids) > len(_event_ids(previous_results)):
+        previous_results = _events_for_ids(previous_result_ids)
+    if len(previous_near_result_ids) > len(_event_ids(previous_near_results)):
+        previous_near_results = _events_for_ids(previous_near_result_ids)
 
-    replace_result_set = bool(
-        search_result is not None
-        or agentic_response is not None
-        or (
-            command_outcome is not None
-            and command_outcome.flow
-            in {
-                "find_events",
-                "count_events",
-                "event_detail",
-                "recommend_next",
-                "recommend_similar",
-            }
-        )
+    context_source = classify_result_context_source(
+        command_flow=command_outcome.flow if command_outcome is not None else None,
+        search_result_present=search_result is not None,
+        agentic_response_present=agentic_response is not None,
+        command_pending_response=bool(
+            command_render is not None and command_render.pending_state is not None
+        ),
+        pending_response_preserving=(
+            pending_handled and not pending_result_set_replaced
+        ),
     )
-    if replace_result_set or result_ids != previous_result_ids:
-        st.session_state.exact_visible_count = min(RESULT_PAGE_SIZE, len(result_ids))
-    if replace_result_set or near_result_ids != previous_near_result_ids:
-        st.session_state.near_visible_count = min(RESULT_PAGE_SIZE, len(near_result_ids))
+    context_flow = turn_flow if command_outcome is None else command_outcome.flow
+
+    result_context = transition_result_context(
+        previous_results=previous_results,
+        previous_result_ids=previous_result_ids,
+        previous_near_results=previous_near_results,
+        previous_near_result_ids=previous_near_result_ids,
+        previous_visible_count=st.session_state.get("exact_visible_count"),
+        previous_near_visible_count=st.session_state.get("near_visible_count"),
+        flow=context_flow,
+        source=context_source,
+        new_results=results,
+        new_result_ids=result_ids,
+        new_near_results=near_results,
+        new_near_result_ids=near_result_ids,
+        page_size=RESULT_PAGE_SIZE,
+    )
+    results = result_context.results
+    near_results = result_context.near_results
+    result_ids = result_context.result_ids
+    near_result_ids = result_context.near_result_ids
+    st.session_state.exact_visible_count = result_context.visible_count
+    st.session_state.near_visible_count = result_context.near_visible_count
     st.session_state.last_results = results
     st.session_state.last_near_results = near_results
     st.session_state.last_result_ids = result_ids
     st.session_state.last_near_result_ids = near_result_ids
-    st.session_state.last_relaxed_condition = relaxed_condition
+    if result_context.replace_result_set:
+        st.session_state.last_relaxed_condition = relaxed_condition
+    else:
+        relaxed_condition = st.session_state.get("last_relaxed_condition") or relaxed_condition
     if command_handled and command_render is not None:
         command_filters = command_render.filters
         known_filter_keys = set(event_search.SearchFilters().to_dict())
         if not isinstance(command_filters, Mapping) or set(command_filters) - known_filter_keys:
             command_filters = None
-        st.session_state.last_filters = dict(command_filters) if command_filters is not None else None
-        st.session_state.last_plan = {
-            "mode": "command",
-            "flow": command_outcome.flow if command_outcome is not None else (
-                quick_action_command or (active_command_pending or {}).get("command")
-            ),
-            "slots": command_outcome.slots if command_outcome is not None else {},
-            "total_matches": (
-                command_outcome.total_matches
-                if command_outcome is not None and command_outcome.total_matches is not None
-                else len(results)
-            ),
-            "pending": command_render.pending_state is not None,
-        }
-        if command_outcome is not None:
+        if result_context.replace_result_set:
+            st.session_state.last_filters = (
+                dict(command_filters) if command_filters is not None else None
+            )
+        if result_context.replace_result_set:
+            st.session_state.last_plan = {
+                "mode": "command",
+                "flow": command_outcome.flow if command_outcome is not None else (
+                    quick_action_command or (active_command_pending or {}).get("command")
+                ),
+                "slots": command_outcome.slots if command_outcome is not None else {},
+                "total_matches": (
+                    command_outcome.total_matches
+                    if command_outcome is not None and command_outcome.total_matches is not None
+                    else len(results)
+                ),
+                "pending": command_render.pending_state is not None,
+            }
+        if result_context.replace_result_set and command_outcome is not None:
             st.session_state.last_command = dict(command_outcome.command)
-        elif quick_action_command is not None:
+        elif result_context.replace_result_set and quick_action_command is not None:
             st.session_state.last_command = dict(quick_action_command)
-        elif active_command_pending is not None:
+        elif result_context.replace_result_set and active_command_pending is not None:
             command_value = active_command_pending.get("command")
             if isinstance(command_value, Mapping):
                 st.session_state.last_command = dict(command_value)
@@ -2822,10 +2857,20 @@ if prompt:
     )
     if selected_event is not None:
         st.session_state.selected_event = selected_event
+        st.session_state.selected_event_id = str(selected_event.get("id") or "") or None
     elif command_handled and command_render is not None and command_render.pair_results:
         st.session_state.selected_event = None
+        st.session_state.selected_event_id = None
     elif search_result is not None:
         st.session_state.selected_event = results[0] if len(results) == 1 else None
+        st.session_state.selected_event_id = (
+            str(results[0].get("id") or "") if len(results) == 1 else None
+        )
+    elif result_context.replace_result_set:
+        # A new multi-event search/recommendation has no single selected
+        # event.  Do not let a stale event answer a later pronoun question.
+        st.session_state.selected_event = None
+        st.session_state.selected_event_id = None
     if pending_state_to_store is None:
         st.session_state.pop("pending_recommendation", None)
     else:
