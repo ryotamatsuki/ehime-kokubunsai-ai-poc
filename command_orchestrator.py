@@ -46,6 +46,140 @@ MAX_PAIR_RESULTS = 3
 DEFAULT_PAIR_BUFFER_MINUTES = 30
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 
+# These are semantic feature groups, not a phrase dictionary.  The guard only
+# handles the small set of pair requests whose structure is unambiguous; all
+# other language remains the responsibility of the Semantic Command model.
+_PAIR_MULTIPLE_MARKERS = (
+    "2つ",
+    "二つ",
+    "2か所",
+    "二か所",
+    "2箇所",
+    "二箇所",
+    "複数",
+    "いくつか",
+    "何個か",
+    "1つずつ",
+)
+_PAIR_ACTION_MARKERS = (
+    "回る",
+    "回りたい",
+    "回れる",
+    "巡る",
+    "巡りたい",
+    "はしご",
+    "行く",
+    "行きたい",
+    "行ける",
+    "参加",
+    "見たい",
+    "見られる",
+)
+_PAIR_VETO_MARKERS = (
+    "2番目",
+    "二番目",
+    "2つ目",
+    "二つ目",
+    "2件",
+    "二件",
+    "2人",
+    "二人",
+    "2歳",
+    "二歳",
+    "小2",
+    "小学2年",
+)
+
+
+def _flatten_groups(groups: Any) -> list[str]:
+    values: list[str] = []
+    if not isinstance(groups, (list, tuple)):
+        return values
+    for group in groups:
+        items = group if isinstance(group, (list, tuple)) else (group,)
+        for item in items:
+            value = str(item).strip()
+            if value and value not in values:
+                values.append(value)
+    return values
+
+
+def _high_confidence_pair_plan(
+    query: str,
+    reference_date: date,
+) -> CommandPlan | None:
+    """Build a trusted pair plan only for an unambiguous multi-visit utterance.
+
+    This function deliberately runs after the security guard and before LLM
+    generation.  It extracts only deterministic, contract-valid slots; event
+    existence and pair feasibility remain in the trusted executor.
+    """
+
+    if event_search.classify_intent(query) == "injection":
+        return None
+    normalized = event_search.normalize_query(query).replace(" ", "")
+    if any(marker in normalized for marker in _PAIR_VETO_MARKERS):
+        return None
+    has_multiple = any(marker in normalized for marker in _PAIR_MULTIPLE_MARKERS)
+    has_action = any(marker in normalized for marker in _PAIR_ACTION_MARKERS)
+    has_explicit_pair = "はしご" in normalized or (
+        "午前と午後" in normalized and ("1つずつ" in normalized or has_action)
+    )
+    if not has_explicit_pair and not (has_multiple and has_action):
+        return None
+
+    try:
+        parsed = event_search.parse_query_strict(query, reference_date)
+        dates = list(parsed.dates) if len(parsed.dates) == 1 else []
+        topics = [
+            term
+            for term in event_search.topics_to_soft_terms(parsed.soft_terms)
+            if term not in parsed.genres
+        ]
+        pair_time_slots = list(parsed.time_slots)
+        if set(pair_time_slots) >= {"午前", "午後"}:
+            # "午前と午後に1つずつ" describes the pair as a whole.  The
+            # existing pair executor applies time_slots to each candidate, so
+            # passing both values would incorrectly require every event to
+            # satisfy both halves of the visit plan.
+            pair_time_slots = []
+        slots = CommandSlots.from_dict(
+            {
+                "dates": dates,
+                "municipalities": _flatten_groups(parsed.city_groups),
+                "regions": _flatten_groups(parsed.region_groups),
+                "genres": list(parsed.genres),
+                "topics": topics,
+                "audience": (
+                    "family"
+                    if parsed.child_friendly is True
+                    and parsed.age is None
+                    and parsed.age_group is None
+                    else None
+                ),
+                "age": parsed.age,
+                "age_group": parsed.age_group,
+                "age_intent": parsed.age_intent,
+                "venue": {
+                    "屋内": "indoor",
+                    "屋外": "outdoor",
+                }.get(parsed.venue),
+                "entry_free": parsed.entry_free,
+                "paid_only": True if parsed.paid_only else None,
+                "max_entry_fee": parsed.max_entry_fee,
+                "reservation_required": parsed.reservation_required,
+                "rain_preferred": True if parsed.rain_preferred else None,
+                "time_slots": pair_time_slots,
+                "time_after": parsed.time_after,
+                "visit_count": 2,
+            }
+        )
+        return CommandPlan("plan_event_pair", slots, confidence="high")
+    except (CommandValidationError, TypeError, ValueError):
+        # A guard must fail open to the normal Semantic Command path when its
+        # deterministic extraction cannot satisfy the existing contract.
+        return None
+
 
 @dataclass(frozen=True)
 class CommandState:
@@ -58,6 +192,23 @@ class CommandState:
     active_flow: str | None = None
     pending_slots: Mapping[str, Any] = field(default_factory=dict)
     pending_required_slots: tuple[str, ...] = ()
+
+    @property
+    def requested_slot(self) -> str | None:
+        """The authoritative slot currently requested by the active flow."""
+
+        return self.pending_required_slots[0] if self.pending_required_slots else None
+
+    @property
+    def slots(self) -> Mapping[str, Any]:
+        """The active flow's already-grounded slots.
+
+        ``pending_slots`` remains the single stored representation.  This
+        alias makes the explicit ConversationState contract readable without
+        introducing a second mutable slot dictionary.
+        """
+
+        return self.pending_slots
 
     @classmethod
     def from_mapping(
@@ -715,6 +866,8 @@ class CommandOrchestrator:
                 "last_command": dict(state.last_command) if state.last_command else None,
                 "active_flow": state.active_flow,
                 "pending_slots": dict(state.pending_slots),
+                "pending_required_slots": list(state.pending_required_slots),
+                "requested_slot": state.requested_slot,
             },
             call=self.modal_call,
             output_format=self.output_format,
@@ -756,6 +909,21 @@ class CommandOrchestrator:
 
         generation_ms = 0.0
         generated: CommandGenerationResult | None = None
+        pair_guard_plan = (
+            None
+            if command_plan is not None
+            else _high_confidence_pair_plan(value, context.reference_date)
+        )
+
+        def generate_or_use_guard() -> tuple[
+            CommandPlan | None,
+            CommandGenerationResult | None,
+            float,
+        ]:
+            if pair_guard_plan is not None:
+                return pair_guard_plan, None, 0.0
+            return self._generation(value, context)
+
         if command_plan is not None:
             try:
                 plan = validate_command_plan(command_plan)
@@ -804,7 +972,32 @@ class CommandOrchestrator:
                             total_ms=(time.perf_counter() - started) * 1000
                         ),
                     )
-                plan, generated, generation_ms = self._generation(value, context)
+                if (
+                    event_recommendation.classify_pending_answer(
+                        value,
+                        awaiting="date",
+                        reference_date=context.reference_date,
+                    )
+                    == event_recommendation.PENDING_AMBIGUOUS
+                ):
+                    question = "何日に行く予定か、11/4のように教えてみて。"
+                    pending = {
+                        "flow": pending_base.flow,
+                        "command": pending_base.to_dict(),
+                        "missing_slots": ["dates"],
+                        "awaiting": "date",
+                    }
+                    return self._result(
+                        plan=pending_base,
+                        status="clarification",
+                        message=question,
+                        question=question,
+                        pending=pending,
+                        latency=CommandLatency(
+                            total_ms=(time.perf_counter() - started) * 1000
+                        ),
+                    )
+                plan, generated, generation_ms = generate_or_use_guard()
                 if plan is None:
                     return self._result(
                         plan=self._unsupported_plan(),
@@ -847,7 +1040,32 @@ class CommandOrchestrator:
                             total_ms=(time.perf_counter() - started) * 1000
                         ),
                     )
-                plan, generated, generation_ms = self._generation(value, context)
+                if (
+                    event_recommendation.classify_pending_answer(
+                        value,
+                        awaiting="time",
+                        reference_date=context.reference_date,
+                    )
+                    == event_recommendation.PENDING_AMBIGUOUS
+                ):
+                    question = "何時ごろ見終わる予定か、13時のように教えてみて。"
+                    pending = {
+                        "flow": pending_time_base.flow,
+                        "command": pending_time_base.to_dict(),
+                        "missing_slots": ["time_after"],
+                        "awaiting": "time",
+                    }
+                    return self._result(
+                        plan=pending_time_base,
+                        status="clarification",
+                        message=question,
+                        question=question,
+                        pending=pending,
+                        latency=CommandLatency(
+                            total_ms=(time.perf_counter() - started) * 1000
+                        ),
+                    )
+                plan, generated, generation_ms = generate_or_use_guard()
                 if plan is None:
                     return self._result(
                         plan=self._unsupported_plan(),
@@ -864,7 +1082,7 @@ class CommandOrchestrator:
                         ),
                     )
             else:
-                plan, generated, generation_ms = self._generation(value, context)
+                plan, generated, generation_ms = generate_or_use_guard()
                 if plan is None:
                     # Modal failure is not a semantic unsupported answer; the
                     # caller may route the turn to the conservative legacy path.

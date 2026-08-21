@@ -49,6 +49,126 @@ class RecommendationTimeAnswer:
     invalid: bool = False
 
 
+_PENDING_ANSWER_PREFIXES = ("たぶん", "じゃあ", "えっと")
+_PENDING_DATE_SUFFIXES = tuple(
+    sorted(
+        (
+            "でお願い",
+            "に行くよ",
+            "に行く",
+            "にしよう",
+            "がいい",
+            "くらい",
+            "ごろ",
+            "頃",
+            "だよ",
+            "です",
+            "かな",
+            "で",
+        ),
+        key=len,
+        reverse=True,
+    )
+)
+_PENDING_TIME_SUFFIXES = tuple(
+    sorted(
+        (
+            "くらいかな",
+            "ごろかな",
+            "頃かな",
+            "でお願い",
+            "くらい",
+            "ごろ",
+            "頃",
+            "だよ",
+            "です",
+            "かな",
+            "で",
+        ),
+        key=len,
+        reverse=True,
+    )
+)
+_PENDING_DATE_CORE_RE = re.compile(
+    r"(?:今日|本日|明日|(?:(?:20\d{2})年)?\d{1,2}月\d{1,2}日|"
+    r"(?:(?:20\d{2})[/-])?\d{1,2}[/-]\d{1,2}|\d{1,2}日)"
+)
+_PENDING_TIME_CORE_RE = re.compile(
+    r"(?:(?:午前|午後))?\d{1,2}(?:(?::\d{2})|時(?:(?:半)|(?:ごろ|頃|くらい)?)?)"
+)
+PENDING_CONTINUE_CURRENT_FLOW = "continue_current_flow"
+PENDING_INTERRUPT_WITH_NEW_FLOW = "interrupt_with_new_flow"
+PENDING_AMBIGUOUS = "ambiguous"
+_PENDING_NEW_FLOW_MARKERS = (
+    "やっぱり",
+    "普通に",
+    "探して",
+    "探す",
+    "おすすめ",
+    "イベント",
+    "県内",
+    "無料",
+    "有料",
+    "予約",
+    "子ども",
+    "子供",
+    "料金",
+    "場所",
+    "似た",
+    "市で",
+    "町で",
+    "村で",
+)
+_PENDING_NON_INTENT_TERMS = {
+    "いつか",
+    "そのうち",
+    "まだ",
+    "未定",
+    "わからない",
+    "分からない",
+    "いいよ",
+}
+
+
+def _pending_answer_core(
+    query: str,
+    core_pattern: re.Pattern[str],
+    suffixes: Sequence[str],
+) -> str | None:
+    """Return a date/time core only for an anchored short conversational reply.
+
+    Pending answers are intentionally narrower than general query parsing.  A
+    core date or time may have one known conversational prefix and/or suffix,
+    but arbitrary text surrounding it is not consumed as a slot answer.
+    """
+
+    compact = normalize_query(str(query)).replace(" ", "")
+    if not compact:
+        return None
+
+    bases = [compact.rstrip("。！？!?"), compact]
+    for prefix in _PENDING_ANSWER_PREFIXES:
+        for base in tuple(bases):
+            if base.startswith(prefix):
+                remainder = base[len(prefix) :].lstrip("、,：:")
+                bases.append(remainder)
+
+    seen: set[str] = set()
+    for base in bases:
+        if not base or base in seen:
+            continue
+        seen.add(base)
+        if core_pattern.fullmatch(base):
+            return base
+        for suffix in suffixes:
+            if not base.endswith(suffix):
+                continue
+            candidate = base[: -len(suffix)].rstrip("。！？!?")
+            if core_pattern.fullmatch(candidate):
+                return candidate
+    return None
+
+
 def _format_date_ja(value: date) -> str:
     return f"{value.year}年{value.month}月{value.day}日"
 
@@ -64,16 +184,12 @@ def parse_recommendation_date_answer(
 ) -> RecommendationDateAnswer:
     """Parse only a short, date-shaped reply to a pending date question."""
 
-    normalized = parse_query_text(query)
-    compact = normalized.replace(" ", "")
-    date_like = compact in {"今日", "本日", "明日"} or bool(
-        re.fullmatch(
-            r"(?:(?:20\d{2})年)?\d{1,2}月\d{1,2}日|"
-            r"(?:(?:20\d{2})[/-])?\d{1,2}[/-]\d{1,2}|\d{1,2}日",
-            compact,
-        )
+    compact = _pending_answer_core(
+        query,
+        _PENDING_DATE_CORE_RE,
+        _PENDING_DATE_SUFFIXES,
     )
-    if not date_like:
+    if compact is None:
         return RecommendationDateAnswer(False)
     day_match = re.fullmatch(r"(\d{1,2})日", compact)
     if day_match is not None:
@@ -99,7 +215,13 @@ def parse_query_text(query: str) -> str:
 def parse_recommendation_time_answer(query: str) -> RecommendationTimeAnswer:
     """Parse 13時, 13:00, １３時, and 午後1時 style replies."""
 
-    compact = parse_query_text(query).replace(" ", "")
+    compact = _pending_answer_core(
+        query,
+        _PENDING_TIME_CORE_RE,
+        _PENDING_TIME_SUFFIXES,
+    )
+    if compact is None:
+        return RecommendationTimeAnswer(False)
     match = re.fullmatch(
         r"(?:(午前|午後))?(\d{1,2})(?:(?::(\d{2}))|時(?:(半)|(?:ごろ|頃|くらい)?)?)?",
         compact,
@@ -122,6 +244,58 @@ def parse_recommendation_time_answer(query: str) -> RecommendationTimeAnswer:
         return RecommendationTimeAnswer(True, time(hour, minute))
     except ValueError:
         return RecommendationTimeAnswer(True, invalid=True)
+
+
+def classify_pending_answer(
+    query: str,
+    *,
+    awaiting: str,
+    reference_date: date,
+) -> str:
+    """Classify a turn while a flow is waiting for one slot.
+
+    The caller can therefore preserve the pending state for an ambiguous turn
+    instead of treating every parser miss as permission to discard context.
+    """
+
+    normalized = normalize_query(str(query))
+    if awaiting in {"date", "dates"}:
+        if parse_recommendation_date_answer(normalized, reference_date).is_date_like:
+            return PENDING_CONTINUE_CURRENT_FLOW
+    elif awaiting in {"time", "time_after", "end_time"}:
+        if parse_recommendation_time_answer(normalized).is_time_like:
+            return PENDING_CONTINUE_CURRENT_FLOW
+    else:
+        return PENDING_AMBIGUOUS
+
+    if any(marker in normalized for marker in _PENDING_NEW_FLOW_MARKERS):
+        return PENDING_INTERRUPT_WITH_NEW_FLOW
+
+    parsed = parse_query(normalized, reference_date, include_unknown_residual=False)
+    meaningful_soft_terms = [
+        term for term in parsed.soft_terms if term not in _PENDING_NON_INTENT_TERMS
+    ]
+    meaningful_requested_field = (
+        parsed.requested_field
+        if normalized not in _PENDING_NON_INTENT_TERMS
+        else None
+    )
+    if (
+        parsed.dates
+        or parsed.city_groups
+        or parsed.region_groups
+        or parsed.genres
+        or parsed.age is not None
+        or parsed.age_group
+        or parsed.venue
+        or parsed.entry_free is not None
+        or parsed.paid_only
+        or parsed.reservation_required is not None
+        or meaningful_requested_field
+        or meaningful_soft_terms
+    ):
+        return PENDING_INTERRUPT_WITH_NEW_FLOW
+    return PENDING_AMBIGUOUS
 
 
 def _previous_filter_dates(previous_filters: Mapping[str, Any] | None) -> list[date]:

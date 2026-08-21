@@ -178,6 +178,7 @@ def sanitize_command_state(raw_state: Any) -> dict[str, Any]:
     allowed = (
         "reference_date", "selected_event_id", "last_result_ids",
         "last_command", "active_flow", "pending_slots",
+        "pending_required_slots", "requested_slot",
     )
     state = {key: _safe_state_value(raw_state[key]) for key in allowed if key in raw_state}
     if len(json.dumps(state, ensure_ascii=False, separators=(",", ":"))) <= MAX_COMMAND_STATE_LENGTH:
