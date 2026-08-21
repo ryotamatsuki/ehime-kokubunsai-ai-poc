@@ -43,6 +43,7 @@ from command_models import (
     MAX_VISIT_COUNT,
 )
 from flow_registry import FLOW_REGISTRY
+from event_image_assets import event_image_path
 from iyoshirube_ui import (
     EMOTION_NORMAL,
     EMOTION_THINKING,
@@ -303,6 +304,11 @@ def _inject_ui_css() -> None:
             color: #526174;
             font-size: 0.78rem;
             line-height: 1.45;
+        }
+        [class*="st-key-iyoshirube-event-image-"] img {
+            aspect-ratio: 4 / 5;
+            object-fit: cover;
+            border-radius: 0.55rem;
         }
         @media (max-width: 700px) {
             [data-testid="stMainBlockContainer"] {
@@ -1691,7 +1697,12 @@ def _redact_event_facts(
     return redacted or "候補カードを確認してみてください。こんなんもあるよ。"
 
 
-def _render_event_card(event: dict[str, object], index: int) -> None:
+def _render_event_card(
+    event: dict[str, object],
+    index: int,
+    *,
+    scope: str = "exact",
+) -> None:
     def fact(icon: str, label: str, value: object) -> None:
         st.markdown(
             "<div class=\"iyoshirube-event-fact\">"
@@ -1701,8 +1712,7 @@ def _render_event_card(event: dict[str, object], index: int) -> None:
             unsafe_allow_html=True,
         )
 
-    with st.container(border=True, key=f"iyoshirube-event-card-{index}"):
-        st.markdown(f"**{index}. {event['イベント名']}**")
+    def render_facts() -> None:
         fact("◷", "日時", event["日時"])
         fact("⌖", "場所", event["場所"])
         fact("✦", "ジャンル", event["ジャンル"])
@@ -1712,6 +1722,26 @@ def _render_event_card(event: dict[str, object], index: int) -> None:
         fact("♧", "対象", audience)
         fact("⌂", "会場", event["屋内/屋外"])
         fact("¥", "料金", event["料金"])
+
+    event_key = str(event.get("id", index))
+    card_key = f"iyoshirube-event-card-{scope}-{event_key}-{index}"
+    image_key = f"iyoshirube-event-image-{scope}-{event_key}-{index}"
+
+    with st.container(border=True, key=card_key):
+        st.markdown(f"**{index}. {event['イベント名']}**")
+        image_path = event_image_path(event.get("id"))
+        if image_path is None:
+            render_facts()
+        else:
+            facts_col, image_col = st.columns([1.65, 1])
+            with facts_col:
+                render_facts()
+            with image_col:
+                with st.container(key=image_key):
+                    st.image(
+                        str(image_path),
+                        use_container_width=True,
+                    )
         st.markdown(
             "<div class=\"iyoshirube-event-overview\">"
             f"<strong>▣ 概要</strong> {escape(str(event['概要']))}"
@@ -1734,6 +1764,7 @@ def _render_event_grid(
     events: list[dict[str, object]],
     *,
     start_index: int = 1,
+    scope: str = "exact",
 ) -> None:
     """Render grounded event cards in a responsive, at-most-three-column grid."""
 
@@ -1745,6 +1776,7 @@ def _render_event_grid(
                 _render_event_card(
                     row_events[event_offset],
                     start_index + row_start + event_offset,
+                    scope=scope,
                 )
 
 
@@ -1959,13 +1991,13 @@ if st.session_state.last_pair_results:
 
 if st.session_state.last_results and not st.session_state.last_pair_results:
     st.subheader("条件に合うイベント")
-    _render_event_grid(st.session_state.last_results)
+    _render_event_grid(st.session_state.last_results, scope="exact")
 
 if st.session_state.last_near_results:
     relaxed = st.session_state.last_relaxed_condition or "一部の条件"
     st.subheader(f"参考候補（「{relaxed}」を外した場合）")
     st.caption("上の検索結果には含めていません。条件を緩めた候補として表示しています。")
-    _render_event_grid(st.session_state.last_near_results)
+    _render_event_grid(st.session_state.last_near_results, scope="near")
 
 if st.session_state.get("last_query"):
     st.divider()

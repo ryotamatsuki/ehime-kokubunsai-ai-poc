@@ -1,0 +1,50 @@
+{
+  "manifest_version": 1,
+  "kind": "event-card-images",
+  "source": {
+    "file": "data/events.json",
+    "id_field": "id",
+    "event_count": 30
+  },
+  "asset_root": "assets/events",
+  "filename_pattern": "event_{event_id}.png",
+  "display": {
+    "mime_type": "image/png",
+    "object_fit": "cover",
+    "recommended_card_ratio": "4:5",
+    "note": "Generated PoC representative images; do not treat as documentary photographs."
+  },
+  "prompt_version": "event-card-v1",
+  "events": {
+    "001": {"file": "event_001.png", "status": "ready"},
+    "002": {"file": "event_002.png", "status": "ready"},
+    "003": {"file": "event_003.png", "status": "ready"},
+    "004": {"file": "event_004.png", "status": "ready"},
+    "005": {"file": "event_005.png", "status": "ready"},
+    "006": {"file": "event_006.png", "status": "ready"},
+    "007": {"file": "event_007.png", "status": "ready"},
+    "008": {"file": "event_008.png", "status": "ready"},
+    "009": {"file": "event_009.png", "status": "ready"},
+    "010": {"file": "event_010.png", "status": "ready"},
+    "011": {"file": "event_011.png", "status": "ready"},
+    "012": {"file": "event_012.png", "status": "ready"},
+    "013": {"file": "event_013.png", "status": "ready"},
+    "014": {"file": "event_014.png", "status": "ready"},
+    "015": {"file": "event_015.png", "status": "ready"},
+    "016": {"file": "event_016.png", "status": "ready"},
+    "017": {"file": "event_017.png", "status": "ready"},
+    "018": {"file": "event_018.png", "status": "ready"},
+    "019": {"file": "event_019.png", "status": "ready"},
+    "020": {"file": "event_020.png", "status": "ready"},
+    "021": {"file": "event_021.png", "status": "ready"},
+    "022": {"file": "event_022.png", "status": "ready"},
+    "023": {"file": "event_023.png", "status": "ready"},
+    "024": {"file": "event_024.png", "status": "ready"},
+    "025": {"file": "event_025.png", "status": "ready"},
+    "026": {"file": "event_026.png", "status": "ready"},
+    "027": {"file": "event_027.png", "status": "ready"},
+    "028": {"file": "event_028.png", "status": "ready"},
+    "029": {"file": "event_029.png", "status": "ready"},
+    "030": {"file": "event_030.png", "status": "ready"}
+  }
+}
