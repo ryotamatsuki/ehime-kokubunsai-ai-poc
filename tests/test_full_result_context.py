@@ -118,6 +118,30 @@ def test_ordinal_place_question_uses_the_router_reference_path() -> None:
     )
 
 
+def test_pronoun_venue_question_answers_the_selected_event() -> None:
+    search = event_search.search_events(
+        "子どもと楽しめるイベント",
+        reference_date=POC_REFERENCE_DATE,
+    )
+    selected = search.events[-1]
+    route = route_conversation(
+        "それは屋内？",
+        search.events,
+        selected,
+        None,
+        POC_REFERENCE_DATE,
+    )
+    filters = event_search.parse_query("それは屋内？", POC_REFERENCE_DATE)
+
+    assert route.action_type == "reference_followup"
+    assert route.selected_event is not None
+    assert route.selected_event["id"] == selected["id"]
+    assert filters.requested_field == "venue"
+    assert event_search.attribute_answer(route.selected_event, "venue").endswith(
+        "屋内です。"
+    )
+
+
 def test_selected_event_is_separate_from_the_preserved_result_set() -> None:
     previous_ids = ["007", "008", "010", "016", "024"]
     update = _transition(
