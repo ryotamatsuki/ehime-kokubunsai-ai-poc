@@ -54,13 +54,56 @@ jobs:
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
         run: |
           mkdir -p artifacts
-          modal run --quiet \
-            --write-result artifacts/live_semantic_command_eval.json \
-            modal_backend.py::live_semantic_command_eval \
-            --limit "${{ inputs.limit }}" \
-            --dialogue-limit "${{ inputs.dialogue_limit }}" \
-            --format-enforcer "${{ inputs.format_enforcer }}" \
-            --include-raw "${{ inputs.include_raw }}"
+          live_args=(
+            --write-result artifacts/live_semantic_command_eval.json
+            modal_backend.py::live_semantic_command_eval
+            --limit "${{ inputs.limit }}"
+            --dialogue-limit "${{ inputs.dialogue_limit }}"
+            --format-enforcer "${{ inputs.format_enforcer }}"
+          )
+          if [ "${{ inputs.include_raw }}" = "true" ]; then
+            live_args+=(--include-raw)
+          fi
+          modal run --quiet "${live_args[@]}"
+
+      - name: Print safe live evaluation summary
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("artifacts/live_semantic_command_eval.json")
+          if not path.exists():
+              print("live evaluation artifact: unavailable")
+              raise SystemExit(0)
+          payload = json.loads(path.read_text(encoding="utf-8"))
+          single = payload.get("single_turn", {})
+          multi = payload.get("multi_turn", {})
+          summary = {
+              "model": payload.get("model"),
+              "build_sha": payload.get("build_sha"),
+              "dataset": payload.get("dataset"),
+              "format_enforcer": payload.get("format_enforcer"),
+              "single_turn": {
+                  key: single.get(key)
+                  for key in (
+                      "cases", "route_accuracy", "macro_f1", "json_valid_first_pass_rate",
+                      "repair_rate", "repair_success_rate", "final_valid_command_rate",
+                      "fallback_rate", "median_latency_ms", "p95_latency_ms",
+                      "failure_categories",
+                  )
+              },
+              "multi_turn": {
+                  key: multi.get(key)
+                  for key in (
+                      "dialogues", "route_accuracy", "final_valid_command_rate",
+                      "median_latency_ms", "p95_latency_ms", "failure_categories",
+                  )
+              },
+          }
+          print(json.dumps(summary, ensure_ascii=False, sort_keys=True))
+          PY
 
       - name: Upload live evaluation artifact
         if: always()
@@ -69,3 +112,4 @@ jobs:
           name: live-semantic-command-evaluation-${{ github.run_id }}
           path: artifacts/live_semantic_command_eval.json
           if-no-files-found: warn
+
