@@ -513,7 +513,7 @@ class EhimeCulturalGuide:
                 output_format,
                 body.get("repair"),
             )
-        elif mode == "planner":
+        elif str(mode) == "planner":
             user_query = str(body.get("query", "")).strip()
             messages = self._make_planner_messages(
                 user_query,
@@ -604,3 +604,4 @@ def live_semantic_command_eval(
     rendered = json.dumps(result, ensure_ascii=False, sort_keys=True)
     print(rendered)
     return rendered
+
