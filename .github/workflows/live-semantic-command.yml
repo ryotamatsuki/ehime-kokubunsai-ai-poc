@@ -1,5 +1,6 @@
 name: Live Semantic Command evaluation
 
+# Temporary PR execution branch for the 2026-08-22 live baseline measurement.
 on:
   workflow_dispatch:
     inputs:
