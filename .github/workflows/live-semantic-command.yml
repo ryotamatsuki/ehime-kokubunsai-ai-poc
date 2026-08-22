@@ -24,9 +24,6 @@ on:
         required: false
         type: boolean
         default: false
-  pull_request:
-    branches:
-      - main
 
 permissions:
   contents: read
@@ -60,11 +57,11 @@ jobs:
           live_args=(
             --write-result artifacts/live_semantic_command_eval.json
             modal_backend.py::live_semantic_command_eval
-            --limit "${{ inputs.limit || '80' }}"
-            --dialogue-limit "${{ inputs.dialogue_limit || '20' }}"
-            --format-enforcer "${{ inputs.format_enforcer || 'baseline' }}"
+            --limit "${{ inputs.limit }}"
+            --dialogue-limit "${{ inputs.dialogue_limit }}"
+            --format-enforcer "${{ inputs.format_enforcer }}"
           )
-          if [ "${{ inputs.include_raw || false }}" = "true" ]; then
+          if [ "${{ inputs.include_raw }}" = "true" ]; then
             live_args+=(--include-raw)
           fi
           modal run --quiet "${live_args[@]}"
