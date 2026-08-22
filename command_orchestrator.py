@@ -30,6 +30,7 @@ from command_generator import (
     DEFAULT_COMMAND_FORMAT,
     generate_command,
 )
+from command_observability import TurnObservation
 from command_models import (
     CommandPlan,
     CommandSlots,
@@ -340,6 +341,7 @@ class CommandTurnResult:
     attempts: int = 0
     repaired: bool = False
     latency: CommandLatency = field(default_factory=CommandLatency)
+    observability: dict[str, Any] = field(default_factory=dict)
     handled: bool = True
 
     @property
@@ -783,6 +785,7 @@ class CommandOrchestrator:
         self.adapters = DeterministicAdapters(events, reference_date)
         self.dispatcher = FlowDispatcher(self.adapters)
         self.output_format = output_format
+        self._current_observation: TurnObservation | None = None
 
     @staticmethod
     def _security_guard(query: str) -> str | None:
@@ -809,6 +812,22 @@ class CommandOrchestrator:
         handled: bool = True,
         **kwargs: Any,
     ) -> CommandTurnResult:
+        observation = self._current_observation
+        if observation is not None:
+            observation.finish(flow=plan.flow, status=status)
+            if observation.has_search_context is False:
+                observation.has_search_context = False
+            if status == "clarification" and plan.flow in {"explain_search", "explain_result"}:
+                if not observation.has_search_context:
+                    observation.mark_fallback("missing_search_context", error_type="missing_search_context")
+            if status == "execution_error":
+                observation.mark_fallback("execution_error", error_type="execution_error")
+            if status == "unavailable":
+                observation.mark_fallback(
+                    observation.semantic_command_error_type or "semantic_command_unavailable",
+                    error_type=observation.semantic_command_error_type,
+                )
+            kwargs.setdefault("observability", observation.emit())
         return CommandTurnResult(
             status=status,
             command=plan,
@@ -1012,6 +1031,8 @@ class CommandOrchestrator:
         if self.modal_call is None:
             elapsed = (time.perf_counter() - started) * 1000
             return None, None, elapsed
+        if self._current_observation is not None:
+            self._current_observation.semantic_command_called = True
         generated = generate_command(
             query,
             {
@@ -1031,6 +1052,8 @@ class CommandOrchestrator:
             output_format=self.output_format,
         )
         elapsed = (time.perf_counter() - started) * 1000
+        if self._current_observation is not None:
+            self._current_observation.mark_generation(generated, elapsed)
         if generated.error and generated.plan.flow == "unsupported":
             return None, generated, elapsed
         return generated.plan, generated, elapsed
@@ -1045,8 +1068,15 @@ class CommandOrchestrator:
         started = time.perf_counter()
         value = _safe_query(query)
         context = CommandState.from_mapping(state, self.reference_date)
+        self._current_observation = TurnObservation(
+            value,
+            has_search_context=context.last_search_context is not None,
+            last_result_count=context.last_result_count,
+        )
 
         if self._reset_query(value):
+            self._current_observation.deterministic_route = "reset"
+            self._current_observation.deterministic_confidence = "high"
             plan = self._unsupported_plan()
             return self._result(
                 plan=plan,
@@ -1057,6 +1087,8 @@ class CommandOrchestrator:
 
         security_message = self._security_guard(value)
         if security_message is not None:
+            self._current_observation.deterministic_route = "security_or_domain_guard"
+            self._current_observation.deterministic_confidence = "high"
             plan = self._unsupported_plan()
             return self._result(
                 plan=plan,
@@ -1072,6 +1104,9 @@ class CommandOrchestrator:
             if command_plan is not None
             else _high_confidence_pair_plan(value, context.reference_date)
         )
+        if pair_guard_plan is not None:
+            self._current_observation.deterministic_route = "pair_fast_path"
+            self._current_observation.deterministic_confidence = "high"
 
         def generate_or_use_guard() -> tuple[
             CommandPlan | None,
@@ -1083,6 +1118,8 @@ class CommandOrchestrator:
             return self._generation(value, context)
 
         if command_plan is not None:
+            self._current_observation.deterministic_route = "trusted_command_plan"
+            self._current_observation.deterministic_confidence = "high"
             try:
                 plan = validate_command_plan(command_plan)
             except (CommandValidationError, TypeError, ValueError):
@@ -1099,6 +1136,8 @@ class CommandOrchestrator:
             pending_time_base = self._pending_time_base(context)
             pending_time_plan = self._pending_time_fast_path(value, context)
             if pending_plan is not None:
+                self._current_observation.deterministic_route = "pending_date_fast_path"
+                self._current_observation.deterministic_confidence = "high"
                 plan = pending_plan
                 generated = None
             elif pending_base is not None:
@@ -1172,6 +1211,8 @@ class CommandOrchestrator:
                         ),
                     )
             elif pending_time_plan is not None:
+                self._current_observation.deterministic_route = "pending_time_fast_path"
+                self._current_observation.deterministic_confidence = "high"
                 plan = pending_time_plan
                 generated = None
             elif pending_time_base is not None:
@@ -1263,6 +1304,8 @@ class CommandOrchestrator:
             plan = self._reconcile_generated_slots(plan, value, context)
 
         if plan.flow in {"explain_search", "explain_result"} and context.last_search_context is None:
+            if self._current_observation.semantic_command_error_type is None:
+                self._current_observation.fallback_reason = "missing_search_context"
             message = (
                 "直前の検索結果がないけん、まずイベントを探してみて。"
                 if plan.flow == "explain_search"
@@ -1324,6 +1367,8 @@ class CommandOrchestrator:
         try:
             result, pairs, events, filters, message = self.dispatcher.dispatch(plan, context, value)
         except (CommandValidationError, TypeError, ValueError, KeyError) as exc:
+            if self._current_observation is not None:
+                self._current_observation.semantic_command_error_type = "execution_error"
             return self._result(
                 plan=self._unsupported_plan(),
                 status="execution_error",

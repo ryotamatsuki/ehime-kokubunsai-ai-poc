@@ -1,0 +1,77 @@
+{
+  "work": "conversational-recovery-v2-production-diagnosis",
+  "measured_at": "2026-08-22",
+  "origin_main_sha": "938234ae2de30a6d55976f87eadf36ab0c591894",
+  "modal_backend_sha": "2c79bb4a5fd8cdce762ffcdc8ae793b9606f1df8",
+  "streamlit_app_sha": "d91e080c1663ab9248aca272c00359d69d8cc12b",
+  "command_generator_sha": "6d04753e0a74ae76c355361766d38f2a0ec1bc06",
+  "command_orchestrator_sha": "13a18a7d1ff11d06f38c641801240ed6f55c40df",
+  "conversation_recovery_sha": "13d484e36d2685a0a24aa4f954c9ee095aeac2bf",
+  "command_models_sha": "281a5a24e03af0e382de0d20eadd32bfe49f1279",
+  "flow_registry_sha": "302c58a951a574d15d734beb432f57801af55898",
+  "deterministic_qa": {
+    "compileall": "PASS",
+    "search_v2": "123/123",
+    "conversation_router": "24/24",
+    "conversational_recovery_v1": "105/105",
+    "conversational_recovery_v2": "PASS",
+    "command_semantic_fixture": "DEV 30 + HOLDOUT 26 PASS",
+    "security": "PASS",
+    "pytest_local": "NOT RUN: pytest module is not installed in the local runtime"
+  },
+  "offline_recovery_benchmark": {
+    "holdout_cases": 300,
+    "multi_turn_dialogues": 100,
+    "note": "C is an offline Semantic Command contract fixture, not a live Sarashina model-quality result.",
+    "A_phrase": {
+      "route_accuracy": 0.51,
+      "macro_f1": 0.5139707820561373,
+      "false_positive_rate": 0.0,
+      "false_negative_rate": 0.9238095238095239,
+      "llm_call_rate": 0.0,
+      "median_latency_ms": 1.501,
+      "p95_latency_ms": 2.844
+    },
+    "B_embedding_prototype": {
+      "route_accuracy": 0.3,
+      "macro_f1": 0.329314722855878,
+      "false_positive_rate": 0.14871794871794872,
+      "false_negative_rate": 0.780952380952381,
+      "llm_call_rate": 0.0,
+      "median_latency_ms": 0.419,
+      "p95_latency_ms": 0.535
+    },
+    "C_semantic_command_fixture": {
+      "route_accuracy": 1.0,
+      "macro_f1": 1.0,
+      "false_positive_rate": 0.0,
+      "false_negative_rate": 0.0,
+      "llm_call_rate": 0.7733333333333333,
+      "median_latency_ms": 2.804,
+      "p95_latency_ms": 4.005,
+      "live_model_quality_measured": false
+    }
+  },
+  "modal_runtime": {
+    "app": "ehime-kokubunsai-ai-poc-api",
+    "model": "sbintuitions/sarashina2.2-3b-instruct-v0.1",
+    "gpu": "T4",
+    "quantization": "NF4 4-bit",
+    "max_containers": 1,
+    "scaledown_window_seconds": 60,
+    "lmfe_enabled": false,
+    "schema_reference_index_maximum_before_fix": 8,
+    "python_reference_index_maximum": 30
+  },
+  "holdout_quality_audit": {
+    "exact_duplicate_queries": 0,
+    "duplicate_dialogue_sequences": 95,
+    "unique_dialogue_sequences": 5,
+    "template_generated_single_turn_ratio": 0.9,
+    "command_semantic_recovery_cases": 0
+  },
+  "live_sarashina_baseline": {
+    "status": "PENDING_MANUAL_MODAL_WORKFLOW",
+    "reason": "The pre-change repository had no live evaluator; this checkpoint adds one without changing prompts or routing semantics."
+  }
+}

@@ -23,6 +23,7 @@ from command_models import (
     MAX_VISIT_COUNT,
     validate_command_plan,
 )
+from command_observability import classify_exception, classify_validation_error
 from app_config import MAX_RESULT_SET_SIZE
 from flow_registry import FLOW_REGISTRY, FlowSpec, render_flow_descriptions
 
@@ -53,6 +54,12 @@ class CommandGenerationResult:
     repaired: bool = False
     error: str | None = None
     output_format: str = DEFAULT_COMMAND_FORMAT
+    error_type: str | None = None
+    first_error_type: str | None = None
+    repair_error_type: str | None = None
+    modal_status_class: str | None = None
+    first_pass_valid: bool = False
+    repair_success: bool = False
 
 
 def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -330,6 +337,11 @@ def _fallback_command(
     output_format: str,
     attempts: int = 1,
     repaired: bool = False,
+    *,
+    error_type: str | None = None,
+    first_error_type: str | None = None,
+    repair_error_type: str | None = None,
+    modal_status_class: str | None = None,
 ) -> CommandGenerationResult:
     return CommandGenerationResult(
         plan=CommandPlan(flow="unsupported", slots=CommandSlots(), confidence="low"),
@@ -337,6 +349,10 @@ def _fallback_command(
         repaired=repaired,
         error=error,
         output_format=output_format,
+        error_type=error_type,
+        first_error_type=first_error_type,
+        repair_error_type=repair_error_type,
+        modal_status_class=modal_status_class,
     )
 
 
@@ -354,16 +370,27 @@ def generate_command(
     try:
         raw = call(build_command_payload(query, state, output_format=output_format))
     except Exception as exc:
-        return _fallback_command(f"model call failed: {type(exc).__name__}", output_format)
+        return _fallback_command(
+            f"model call failed: {type(exc).__name__}",
+            output_format,
+            error_type=classify_exception(exc),
+            modal_status_class=getattr(exc, "status_class", None),
+        )
     if raw is None:
-        return _fallback_command("empty model response", output_format)
+        return _fallback_command(
+            "empty model response",
+            output_format,
+            error_type="empty_model_response",
+        )
     try:
         return CommandGenerationResult(
             plan=parse_and_validate_command(raw, output_format=output_format),
             attempts=1,
             output_format=output_format,
+            first_pass_valid=True,
         )
     except (CommandValidationError, TypeError, ValueError) as first_error:
+        first_error_type = classify_validation_error(first_error)
         repair_payload = build_command_payload(
             query,
             state,
@@ -378,6 +405,10 @@ def generate_command(
                 output_format,
                 attempts=2,
                 repaired=True,
+                error_type=classify_exception(exc),
+                first_error_type=first_error_type,
+                repair_error_type=classify_exception(exc),
+                modal_status_class=getattr(exc, "status_class", None),
             )
         if repaired_raw is None:
             return _fallback_command(
@@ -385,6 +416,9 @@ def generate_command(
                 output_format,
                 attempts=2,
                 repaired=True,
+                error_type="repair_failed",
+                first_error_type=first_error_type,
+                repair_error_type="empty_model_response",
             )
         try:
             return CommandGenerationResult(
@@ -392,6 +426,8 @@ def generate_command(
                 attempts=2,
                 repaired=True,
                 output_format=output_format,
+                first_error_type=first_error_type,
+                repair_success=True,
             )
         except (CommandValidationError, TypeError, ValueError) as second_error:
             return _fallback_command(
@@ -399,6 +435,9 @@ def generate_command(
                 output_format,
                 attempts=2,
                 repaired=True,
+                error_type="repair_failed",
+                first_error_type=first_error_type,
+                repair_error_type=classify_validation_error(second_error),
             )
 
 
