@@ -23,6 +23,7 @@ import event_recommendation
 import experience_preferences
 import recommendation_pending
 import conversation_recovery
+from command_observability import ModalCallError, TurnObservation, build_sha, modal_status_class
 from agent_planner import ModalConfig
 from conversation_router import route_conversation
 from app_config import (
@@ -67,6 +68,7 @@ from iyoshirube_ui import (
 
 PAGE_TITLE = "🎭 伊予の文化案内人"
 SERVICE_ID = "ehime-kokubunsai-ai-poc"
+BUILD_SHA = build_sha()
 
 
 @dataclass(frozen=True)
@@ -462,14 +464,21 @@ def _post_command_modal(
             allow_redirects=False,
         )
         if response.status_code < 200 or response.status_code >= 300:
-            return None
-        body = response.json()
+            raise ModalCallError("modal_http_error", status_class=modal_status_class(response.status_code))
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise ModalCallError("modal_protocol_error", status_class=modal_status_class(response.status_code)) from exc
         if not isinstance(body, Mapping) or body.get("service_id") != SERVICE_ID:
-            return None
+            raise ModalCallError("modal_protocol_error", status_class=modal_status_class(response.status_code))
         answer = body.get("answer")
-        return answer if isinstance(answer, (str, Mapping)) else None
-    except (requests.RequestException, ValueError, TypeError):
-        return None
+        if not isinstance(answer, (str, Mapping)):
+            raise ModalCallError("empty_model_response", status_class=modal_status_class(response.status_code))
+        return answer
+    except requests.Timeout as exc:
+        raise ModalCallError("modal_timeout") from exc
+    except requests.RequestException as exc:
+        raise ModalCallError("modal_http_error") from exc
 
 
 def _pair_entrypoint() -> Any:
@@ -799,6 +808,14 @@ def _call_new_command(
         except Exception:
             # A broken or partially deployed Command path falls back below to
             # the existing Agentic/legacy route.
+            observation = TurnObservation(
+                query,
+                has_search_context=bool(state.get("has_last_search_context")),
+                last_result_count=int(state.get("last_result_count") or 0),
+            )
+            observation.semantic_command_called = True
+            observation.mark_fallback("orchestrator_exception", error_type="orchestrator_exception")
+            observation.emit()
             return None
 
     # Compatibility adapter for an intermediate checkout that exposes a
@@ -2250,6 +2267,7 @@ with st.sidebar:
         ):
             _reset()
         st.caption("⚠ 個人情報・機密情報・未公開情報は入力しないでください。")
+        st.caption(f"Build: {BUILD_SHA}")
 
 _render_assistant_message(
     "こんにちは、いよしるべです。\n\n"
