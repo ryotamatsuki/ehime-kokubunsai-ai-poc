@@ -356,6 +356,36 @@ def _fallback_command(
     )
 
 
+def _inherit_trusted_recommendation_date(plan: CommandPlan, state: Any) -> CommandPlan:
+    """Carry one prior validated search date into a selected-event follow-up.
+
+    The LLM is still forbidden from inventing a date.  This helper only uses
+    an already validated previous command held in trusted conversation state,
+    and only for ``recommend_next`` when a selected event is present.
+    """
+
+    if plan.flow != "recommend_next" or plan.slots.dates or not isinstance(state, Mapping):
+        return plan
+    if not str(state.get("selected_event_id") or "").strip():
+        return plan
+    previous = state.get("last_command")
+    if not isinstance(previous, Mapping):
+        return plan
+    try:
+        previous_plan = validate_command_plan(previous)
+    except (CommandValidationError, TypeError, ValueError):
+        return plan
+    if len(previous_plan.slots.dates) != 1:
+        return plan
+    values = plan.slots.to_dict()
+    values["dates"] = list(previous_plan.slots.dates)
+    return CommandPlan(
+        flow=plan.flow,
+        slots=CommandSlots.from_dict(values),
+        confidence=plan.confidence,
+    )
+
+
 def generate_command(
     query: str,
     state: Any,
@@ -383,8 +413,9 @@ def generate_command(
             error_type="empty_model_response",
         )
     try:
+        plan = parse_and_validate_command(raw, output_format=output_format)
         return CommandGenerationResult(
-            plan=parse_and_validate_command(raw, output_format=output_format),
+            plan=_inherit_trusted_recommendation_date(plan, state),
             attempts=1,
             output_format=output_format,
             first_pass_valid=True,
@@ -421,8 +452,9 @@ def generate_command(
                 repair_error_type="empty_model_response",
             )
         try:
+            repaired_plan = parse_and_validate_command(repaired_raw, output_format=output_format)
             return CommandGenerationResult(
-                plan=parse_and_validate_command(repaired_raw, output_format=output_format),
+                plan=_inherit_trusted_recommendation_date(repaired_plan, state),
                 attempts=2,
                 repaired=True,
                 output_format=output_format,
