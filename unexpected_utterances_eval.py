@@ -326,7 +326,12 @@ def evaluate_dataset(
     contract = validate_dataset(dataset)
     selected = list(dataset.get("cases", []))[: max(0, int(limit))]
     rows = [
-        evaluate_case(case, invoke, include_raw,format_enforcer=format_enforcer)
+        evaluate_case(
+            case,
+            invoke,
+            include_raw=include_raw,
+            format_enforcer=format_enforcer,
+        )
         for case in selected
     ]
     return {
