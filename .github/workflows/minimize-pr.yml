@@ -40,32 +40,10 @@ jobs:
                   1,
               )
 
-          security_block = '''        security_message = self._security_guard(value)
-          if security_message is not None:
-              self._current_observation.deterministic_route = "security_or_domain_guard"
-              self._current_observation.deterministic_confidence = "high"
-              plan = self._unsupported_plan()
-              return self._result(
-                  plan=plan,
-                  status="unsupported",
-                  message=security_message,
-                  latency=CommandLatency(total_ms=(time.perf_counter() - started) * 1000),
-              )
-
-          generation_ms = 0.0
-          '''
-          minimal_block = '''        security_message = self._security_guard(value)
-          if security_message is not None:
-              self._current_observation.deterministic_route = "security_or_domain_guard"
-              self._current_observation.deterministic_confidence = "high"
-              plan = self._unsupported_plan()
-              return self._result(
-                  plan=plan,
-                  status="unsupported",
-                  message=security_message,
-                  latency=CommandLatency(total_ms=(time.perf_counter() - started) * 1000),
-              )
-
+          marker = "\n        generation_ms = 0.0\n"
+          if marker not in text:
+              raise SystemExit("generation anchor not found")
+          guard = """
           if command_plan is None:
               suitability = suitability_clarification.analyze_suitability_request(value)
               if suitability.needs_clarification:
@@ -80,12 +58,12 @@ jobs:
                   )
               if suitability.should_strip_suitability_marker:
                   value = suitability.sanitized_query
-
-          generation_ms = 0.0
-          '''
-          if security_block not in text:
-              raise SystemExit("security anchor not found")
-          text = text.replace(security_block, minimal_block, 1)
+          """
+          guard = "\n".join(
+              ("        " + line if line else line)
+              for line in guard.strip("\n").splitlines()
+          ) + "\n"
+          text = text.replace(marker, "\n" + guard + marker.lstrip("\n"), 1)
           path.write_text(text, encoding="utf-8")
           PY
 
