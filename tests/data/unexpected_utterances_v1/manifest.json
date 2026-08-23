@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "version": "unexpected-user-utterances-v1",
+  "frozen_against_main_sha": "2a424ec8fb390cadc1390bcf2c64c7ed115c0fa2",
+  "reference_date": "2028-11-03",
+  "purpose": "Exploratory baseline for natural, previously unmodeled user utterances. Freeze before observing results; do not tune production code against this file before the first run.",
+  "category_targets": {
+    "ambiguous_suitability": 20,
+    "underspecified": 15,
+    "compound_constraints": 15,
+    "context_followup": 15,
+    "negation_priority": 10,
+    "colloquial_typo_dialect": 10,
+    "data_gap_boundary": 10,
+    "security_scope": 5
+  },
+  "scoring_policy": {
+    "automatic_dimensions": [
+      "allowed_flow",
+      "allowed_status",
+      "required_slot_subset",
+      "forbidden_slot_absence",
+      "max_modal_calls",
+      "no_auto_relax"
+    ],
+    "manual_review": "Cases with manual_review=true require response-level review for unsupported inference, fabricated facts, guarantees, or UX quality.",
+    "baseline_rule": "First execution must use the frozen main SHA above with no production behavior changes made from these cases.",
+    "post_baseline_rule": "Cluster failures by risk/category before changing code. Keep a holdout subset when converting failures into regression tests."
+  },
+  "files": [
+    "ambiguous_suitability.json",
+    "underspecified.json",
+    "compound_constraints.json",
+    "context_followup.json",
+    "negation_priority.json",
+    "colloquial_typo_dialect.json",
+    "data_gap_boundary.json",
+    "security_scope.json"
+  ]
+}

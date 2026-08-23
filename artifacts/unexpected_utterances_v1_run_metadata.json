@@ -1,0 +1,8 @@
+{
+  "repository": "ryotamatsuki/ehime-kokubunsai-ai-poc",
+  "commit_sha": "ad54c1f3e08ab96602406f00d94fb78b12a4afe2",
+  "ref": "refs/heads/test/unexpected-utterances-v1-baseline-run",
+  "workflow": "Unexpected User Utterances v1 baseline",
+  "run_id": "32641701109",
+  "run_attempt": "1"
+}
