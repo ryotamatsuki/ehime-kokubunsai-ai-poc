@@ -576,9 +576,14 @@ class DeterministicAdapters:
         if selected is None:
             spec = SearchSpec("command-next", "recommend_next_events", "recommendation", {})
             return agent_tools.execute_tool(spec, self.events, self.reference_date), None
+        schedule = event_details.normalize_schedule(selected)
         day = self.reference_date
         if slots.dates:
             day = date.fromisoformat(slots.dates[0])
+        elif schedule.start_date == schedule.end_date:
+            # A selected single-day event is itself authoritative for the
+            # recommendation day. Never substitute the PoC current date.
+            day = schedule.start_date
         selected_end_override = None
         if slots.time_after is not None and str(selected.get("参加形式")) == event_recommendation.DROP_IN_ENTRY:
             hours, minutes = divmod(slots.time_after, 60)

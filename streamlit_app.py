@@ -782,7 +782,7 @@ def _call_new_command(
                 and state.get("pending_required_slots")
                 and state.get("last_command")
             )
-            native_plan = None if skip_generation and pending_state else command_payload
+            native_plan = command_payload
             raw = orchestrator.handle_query(
                 query,
                 state,
@@ -2394,6 +2394,8 @@ if prompt:
         "explain_search",
         "explain_result",
         "clarify_reference",
+        "recommend_next",
+        "recommend_next_without_selection",
     } or (
         route.action_type == "reference_followup"
         and detail_field is not None
@@ -2603,6 +2605,7 @@ if prompt:
     if (
         not pending_handled
         and not command_handled
+        and route.action_type not in {"recommend_next", "recommend_next_without_selection"}
         and agent_orchestrator.should_use_agentic_search(
         prompt,
         route,
