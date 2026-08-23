@@ -22,6 +22,7 @@ import event_details
 import event_recommendation
 import event_search
 import experience_preferences
+import suitability_clarification
 import faq_search
 from agent_models import SearchSpec, ToolResult
 from app_config import MAX_RESULT_SET_SIZE, POC_REFERENCE_DATE
@@ -1102,6 +1103,20 @@ class CommandOrchestrator:
                 latency=CommandLatency(total_ms=(time.perf_counter() - started) * 1000),
             )
 
+        if command_plan is None:
+            suitability = suitability_clarification.analyze_suitability_request(value)
+            if suitability.needs_clarification:
+                self._current_observation.deterministic_route = "ambiguous_suitability_guard"
+                self._current_observation.deterministic_confidence = "high"
+                plan = self._unsupported_plan()
+                return self._result(
+                    plan=plan,
+                    status="clarification",
+                    message=suitability_clarification.clarification_message(value),
+                    latency=CommandLatency(total_ms=(time.perf_counter() - started) * 1000),
+                )
+            if suitability.should_strip_suitability_marker:
+                value = suitability.sanitized_query
         generation_ms = 0.0
         generated: CommandGenerationResult | None = None
         pair_guard_plan = (
