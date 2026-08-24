@@ -1,8 +1,8 @@
 """Observable frozen-v1 evaluator for Semantic Operations v2.1.
 
 This module intentionally evaluates only the already-exposed Unexpected User
-Utterances v1 regression set.  It never discovers or opens the sealed v2.1
-holdout.  The live harness injects Sarashina frame generation; this evaluator
+Utterances v1 regression set. It never discovers or opens the sealed v2.1
+holdout. The live harness injects Sarashina frame generation; this evaluator
 records raw frame output (when enabled), client/server latency and token counts
 without changing the scoring contract.
 """
@@ -122,7 +122,7 @@ def load_frozen_v1_dataset() -> dict[str, Any]:
     if dataset.get("version") != FROZEN_V1_VERSION:
         raise ValueError("unexpected frozen-v1 dataset version")
     contract = validate_dataset(dataset)
-    if int(contract.get("total_cases", 0)) != 100:
+    if int(contract.get("cases", 0)) != 100:
         raise ValueError("frozen-v1 dataset must contain exactly 100 cases")
     return dataset
 
