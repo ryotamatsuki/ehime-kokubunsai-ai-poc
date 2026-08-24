@@ -1,0 +1,52 @@
+name: Semantic v2.1 Preflight
+
+on:
+  push:
+    branches:
+      - feature/semantic-operations-v2-1-pre-eval
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: semantic-v2-1-preflight-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install pytest
+        run: python -m pip install --upgrade pytest
+      - name: Compile
+        run: python -m compileall -q .
+      - name: Run deterministic regression
+        run: python -m pytest -q
+      - name: Run frozen-v1 oracle ceiling
+        run: python semantic_oracle_ceiling_v2.py
+      - name: Verify sealed holdout remains opaque
+        run: |
+          python - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+          root = Path('tests/data/unexpected_utterances_holdout_v2_1')
+          manifest = json.loads((root / 'manifest.json').read_text(encoding='utf-8'))
+          payload = root / manifest['payload']
+          digest = hashlib.sha256(payload.read_bytes()).hexdigest()
+          assert manifest['sealed_before_v2_1_implementation'] is True
+          assert manifest['total_cases'] == 200
+          assert digest == manifest['payload_sha256']
+          print(json.dumps({
+              'version': manifest['version'],
+              'total_cases': manifest['total_cases'],
+              'payload_sha256': digest,
+              'opened': False,
+          }, ensure_ascii=False, sort_keys=True))
+          PY
