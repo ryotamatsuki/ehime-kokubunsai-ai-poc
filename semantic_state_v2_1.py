@@ -1,8 +1,9 @@
 """Trusted sparse-operation reducer for Semantic Operations v2.1.
 
 The reducer applies finite state operations; it never contains utterance-level
-phrase rules.  Explicit supported filters come from deterministic parsing,
-while the sparse frame contributes only semantic operations and disambiguation.
+phrase rules. Explicit supported filters come from deterministic parsing. A
+bounded canonical ``set`` patch can supplement explicit filters that parsing
+missed; unset and Experience operations remain separate state operations.
 """
 
 from __future__ import annotations
@@ -12,7 +13,6 @@ from datetime import date
 from typing import Any, Mapping
 
 import event_search
-import experience_preferences
 from app_config import POC_REFERENCE_DATE
 from command_models import CommandPlan, CommandSlots, CommandValidationError, parse_command_plan
 from semantic_frame_v2_1 import SparseSemanticFrame
@@ -96,9 +96,6 @@ def _sparse(slots: CommandSlots) -> dict[str, Any]:
 
 def grounded_slots_from_query(query: str, reference_date: date = POC_REFERENCE_DATE) -> dict[str, Any]:
     parsed = event_search.parse_query_strict(query, reference_date)
-    # Keep known thematic soft terms even when the same word also maps to a
-    # canonical genre.  They are semantically compatible representations and
-    # preserving both avoids a scoring/adapter false-negative at this boundary.
     topics = event_search.topics_to_soft_terms(parsed.soft_terms)
     values: dict[str, Any] = {
         "dates": list(parsed.dates),
@@ -142,12 +139,12 @@ def _group_present(source: Mapping[str, Any], group: str) -> bool:
     return any(source.get(field_name) not in (None, "", [], (), {}) for field_name in GROUP_FIELDS[group])
 
 
-def _replace_explicit_groups(values: dict[str, Any], grounded: Mapping[str, Any]) -> None:
+def _replace_explicit_groups(values: dict[str, Any], source: Mapping[str, Any]) -> None:
     for group in REPLACE_GROUPS:
-        if _group_present(grounded, group):
+        if _group_present(source, group):
             for field_name in GROUP_FIELDS[group]:
                 _clear(values, field_name)
-    for key, value in grounded.items():
+    for key, value in source.items():
         if not key.startswith("experience_"):
             values[key] = value
 
@@ -198,9 +195,6 @@ def _apply_audience_mode(values: dict[str, Any], frame: SparseSemanticFrame) -> 
         for field_name in ("age", "age_group", "age_intent"):
             _clear(values, field_name)
         values["audience"] = "adult"
-    elif frame.audience_mode == "target":
-        # Explicit deterministic age semantics remain authoritative.
-        pass
 
 
 def _apply_reference(values: dict[str, Any], frame: SparseSemanticFrame, state: Mapping[str, Any] | None) -> None:
@@ -242,6 +236,7 @@ def _data_gap_message(gap: str) -> str:
         "crowding": "混雑度", "noise": "静かさ・騒音", "wheelchair_access": "車椅子で確実に利用できるか",
         "medical_safety": "個別の健康状態に対する安全性", "parking_distance": "駐車場から会場までの実測距離",
         "toilet_proximity": "トイレまでの近さ", "weather_guarantee": "天候による中止保証", "social_fit": "社会的な参加しやすさ",
+        "popularity": "人気順位", "fame": "知名度", "duration_fit": "所要時間への適合", "localness": "愛媛らしさ",
         "other": "その適性条件",
     }
     return f"{labels.get(gap, 'その適性条件')}は、このPoCの根拠データだけでは確定できません。分かっている日時・地域・料金・参加形式などなら絞り込めます。"
@@ -270,6 +265,10 @@ def reduce_sparse_frame(
     values = _previous_slots(state) if frame.scope == "previous" else {}
     _replace_explicit_groups(values, grounded)
     _apply_grounded_experience(values, grounded)
+    # Canonical set is a supplement to deterministic parsing. It uses the same
+    # replacement semantics as any explicit current-turn filter and therefore
+    # cannot accidentally combine old and new values from the same family.
+    _replace_explicit_groups(values, dict(frame.set_slots or {}))
     _apply_sparse_experience(values, frame)
     _apply_audience_mode(values, frame)
     _apply_reference(values, frame, state)
