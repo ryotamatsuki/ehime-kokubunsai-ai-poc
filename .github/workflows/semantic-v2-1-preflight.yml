@@ -29,8 +29,10 @@ jobs:
         run: python -m compileall -q .
       - name: Run deterministic regression
         run: python -m pytest -q
-      - name: Run frozen-v1 oracle ceiling
+      - name: Run frozen-v1 oracle ceiling for v2
         run: python semantic_oracle_ceiling_v2.py
+      - name: Run frozen-v1 oracle ceiling for v2.1
+        run: python semantic_oracle_ceiling_v2_1.py
       - name: Verify sealed holdout remains opaque
         run: |
           python - <<'PY'
