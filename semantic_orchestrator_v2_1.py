@@ -19,6 +19,7 @@ import suitability_clarification
 from app_config import POC_REFERENCE_DATE
 from command_models import CommandPlan, CommandSlots
 from command_orchestrator import CommandOrchestrator, CommandTurnResult
+from semantic_capability_v2_1 import evaluate_capability
 from semantic_frame_v2_1 import SparseFrameError, SparseSemanticFrame, build_sparse_frame_payload
 from semantic_state_v2_1 import SparseReduction, reduce_sparse_frame
 
@@ -173,10 +174,6 @@ class SemanticOperationsOrchestratorV21:
 
         if action == "clarify_reference":
             return action, None, "基準にするイベントを番号かイベント名で教えてみて。", False
-        # The trusted conversation router has already classified generic_scope
-        # and scope_search as outside the supported event-guide capability.
-        # Do not re-open that decision using looser event-query heuristics and
-        # do not spend a model call on a request the product cannot execute.
         if action in {"generic_scope", "scope_search"}:
             return "capability_scope_guard", None, "このPoCは文化祭イベントの検索・参加案内が中心です。", False
         if action == "general_faq":
@@ -229,6 +226,16 @@ class SemanticOperationsOrchestratorV21:
         value = str(query).strip()
         if not value:
             raise ValueError("query must not be empty")
+
+        capability = evaluate_capability(value)
+        if not capability.allowed:
+            return SemanticV21Result(
+                "unsupported",
+                "unsupported",
+                message=capability.message,
+                deterministic_route=f"capability:{capability.reason}",
+                latency_ms=(time.perf_counter() - started) * 1000,
+            )
 
         security_message = self._security_guard(value)
         if security_message is not None:
