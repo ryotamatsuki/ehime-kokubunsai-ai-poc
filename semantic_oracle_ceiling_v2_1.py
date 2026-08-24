@@ -1,6 +1,9 @@
 """Oracle ceiling for Semantic Operations v2.1 using only frozen v1 regression.
 
-The sealed 200-case holdout is intentionally not imported or opened.
+The sealed 200-case holdout is intentionally not imported or opened. The
+oracle supplies perfect high-level semantics and canonical explicit-filter
+patches so failures measure the reducer/router/executor ceiling rather than
+model or lexical-normalization quality.
 """
 
 from __future__ import annotations
@@ -9,7 +12,7 @@ from collections import Counter
 import json
 from typing import Any, Mapping
 
-from semantic_frame_v2_1 import SparseReference, SparseSemanticFrame
+from semantic_frame_v2_1 import SET_SLOT_FIELDS, SparseReference, SparseSemanticFrame
 from semantic_orchestrator_v2_1 import SemanticOperationsOrchestratorV21
 from unexpected_utterances_eval import _forbidden_present, _seed_state, _slot_subset, load_dataset
 
@@ -30,12 +33,22 @@ FIELD_TO_UNSET = {
     "experience_required": "experience_all", "experience_preferred": "experience_all",
     "experience_excluded": "experience_all",
 }
+GROUP_MEMBERS = {
+    "fee": {"entry_free", "paid_only", "max_entry_fee"},
+    "venue": {"venue"}, "rain": {"rain_preferred"},
+    "reservation": {"reservation_required"},
+    "age": {"audience", "age", "age_group", "age_intent"},
+    "location": {"municipalities", "regions"}, "date": {"dates"},
+    "time": {"time_slots", "time_after"}, "topic": {"genres", "topics"},
+    "experience_all": {"experience_required", "experience_preferred", "experience_excluded"},
+}
 
 DATA_GAP_MARKERS = {
     "crowd": "crowding", "noise": "noise", "wheelchair": "wheelchair_access",
     "medical": "medical_safety", "dementia": "medical_safety", "pregnan": "medical_safety",
     "parking": "parking_distance", "toilet": "toilet_proximity", "weather": "weather_guarantee",
-    "social": "social_fit",
+    "social": "social_fit", "popularity": "popularity", "fame": "fame",
+    "duration": "duration_fit", "localness": "localness",
 }
 
 
@@ -61,15 +74,25 @@ def _gap(case: Mapping[str, Any]) -> str | None:
     return "other"
 
 
+def _oracle_unset(required: Mapping[str, Any], forbidden: list[Any]) -> tuple[str, ...]:
+    groups: list[str] = []
+    required_fields = {str(key) for key, value in required.items() if value not in (None, "", [], (), {})}
+    for field_name in forbidden:
+        group = FIELD_TO_UNSET.get(str(field_name))
+        if not group or group in groups:
+            continue
+        # A positive replacement in the same semantic family already removes
+        # the conflicting prior/parser value. Do not erase that positive value.
+        if required_fields & GROUP_MEMBERS[group]:
+            continue
+        groups.append(group)
+    return tuple(groups)
+
+
 def oracle_sparse_frame(case: Mapping[str, Any]) -> SparseSemanticFrame:
     expected = case.get("expected", {})
     required = dict(expected.get("required_slots", {})) if isinstance(expected, Mapping) else {}
     forbidden = list(expected.get("forbidden_slots", [])) if isinstance(expected, Mapping) else []
-    unset: list[str] = []
-    for field_name in forbidden:
-        token = FIELD_TO_UNSET.get(str(field_name))
-        if token and token not in unset:
-            unset.append(token)
 
     reference = None
     kind = required.get("reference_kind")
@@ -90,10 +113,17 @@ def oracle_sparse_frame(case: Mapping[str, Any]) -> SparseSemanticFrame:
     if audience_mode is None and any(required.get(name) is not None for name in ("age", "age_group", "age_intent")):
         audience_mode = "target"
 
+    set_slots = {
+        str(key): value
+        for key, value in required.items()
+        if str(key) in SET_SLOT_FIELDS and value not in (None, "", [], (), {})
+    }
+
     return SparseSemanticFrame(
         intent=intent,
         scope="previous" if required.get("refine_previous") else "new",
-        unset=tuple(unset),
+        set_slots=set_slots,
+        unset=_oracle_unset(required, forbidden),
         require=tuple(required.get("experience_required", [])),
         prefer=tuple(required.get("experience_preferred", [])),
         exclude=tuple(required.get("experience_excluded", [])),
@@ -157,7 +187,13 @@ def evaluate_oracle_v21(dataset: Mapping[str, Any] | None = None) -> dict[str, A
         "machine_pass_rate": round(sum(bool(row["pass"]) for row in rows) / len(rows), 4) if rows else 0.0,
         "category": {name: {"cases": count, "pass": category_pass[name]} for name, count in sorted(categories.items())},
         "failure_checks": dict(failure_checks),
-        "failed": [{"id": row["id"], "failures": row["failures"], "route": row["route"]} for row in rows if not row["pass"]],
+        "failed": [
+            {
+                "id": row["id"], "failures": row["failures"], "route": row["route"],
+                "flow": row["flow"], "status": row["status"], "slots": row["slots"],
+            }
+            for row in rows if not row["pass"]
+        ],
         "zero_model_call_cases": sum(row["model_calls"] == 0 for row in rows),
     }
 
