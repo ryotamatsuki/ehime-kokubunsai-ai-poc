@@ -1,7 +1,7 @@
 """Semantic Operations v2.1 orchestration.
 
 High-confidence conversation state/reference acts are resolved before the LLM.
-Only residual semantic ambiguity reaches the sparse frame normalizer.  The
+Only residual semantic ambiguity reaches the sparse frame normalizer. The
 trusted CommandOrchestrator remains the sole execution surface.
 """
 
@@ -21,7 +21,7 @@ from command_models import CommandPlan, CommandSlots
 from command_orchestrator import CommandOrchestrator, CommandTurnResult
 from semantic_capability_v2_1 import evaluate_capability
 from semantic_frame_v2_1 import SparseFrameError, SparseSemanticFrame, build_sparse_frame_payload
-from semantic_state_v2_1 import SparseReduction, reduce_sparse_frame
+from semantic_state_v2_1 import SparseReduction, grounded_slots_from_query, reduce_sparse_frame
 
 
 FrameCall = Callable[[Mapping[str, Any]], Any]
@@ -70,7 +70,8 @@ def _answer(raw: Any) -> str | None:
 
 
 def generate_sparse_frame(query: str, state: Mapping[str, Any] | None, *, call: FrameCall) -> SparseFrameGeneration:
-    payload = build_sparse_frame_payload(query, state)
+    grounded = grounded_slots_from_query(query)
+    payload = build_sparse_frame_payload(query, state, grounded)
     try:
         raw = call(payload)
     except Exception as exc:
@@ -135,7 +136,6 @@ class SemanticOperationsOrchestratorV21:
     def _reference_slots(route: conversation_router.ConversationRoute, last_results: Sequence[Mapping[str, Any]], state: Mapping[str, Any] | None) -> dict[str, Any]:
         values: dict[str, Any] = {}
         if route.reference_index is not None:
-            # conversation_router uses a zero-based index internally.
             values["reference_kind"] = "ordinal"
             values["reference_index"] = route.reference_index + 1
         elif route.selected_event is not None:
@@ -160,7 +160,13 @@ class SemanticOperationsOrchestratorV21:
         query: str,
         state: Mapping[str, Any] | None,
     ) -> tuple[str, CommandPlan | None, str | None, bool]:
-        """Return (route_name, trusted_plan, immediate_message, previous_scope_hint)."""
+        """Return (route_name, trusted_plan, immediate_message, previous_scope_hint).
+
+        Only routes whose meaning is directly grounded in conversation state
+        are consumed here. Generic/FAQ classification remains available to the
+        sparse semantic normalizer because the legacy router can over-match
+        those classes on compound or underspecified event utterances.
+        """
 
         last_results, selected_event = self._context_events(state)
         route = conversation_router.route_conversation(
@@ -174,10 +180,8 @@ class SemanticOperationsOrchestratorV21:
 
         if action == "clarify_reference":
             return action, None, "基準にするイベントを番号かイベント名で教えてみて。", False
-        if action in {"generic_scope", "scope_search"}:
+        if action == "scope_search":
             return "capability_scope_guard", None, "このPoCは文化祭イベントの検索・参加案内が中心です。", False
-        if action == "general_faq":
-            return action, CommandPlan(flow="general_faq", slots=CommandSlots(), confidence="high"), None, False
         if action == "explain_search":
             return action, CommandPlan(flow="explain_search", slots=CommandSlots(), confidence="high"), None, False
         if action in {"explain_result", "recommend_next", "recommend_similar"}:
