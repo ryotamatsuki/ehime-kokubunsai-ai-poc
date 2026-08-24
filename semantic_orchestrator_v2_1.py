@@ -20,6 +20,7 @@ from app_config import POC_REFERENCE_DATE
 from command_models import CommandPlan, CommandSlots
 from command_orchestrator import CommandOrchestrator, CommandTurnResult
 from semantic_capability_v2_1 import evaluate_capability
+from semantic_demographic_v2_1 import needs_relational_demographic_clarification
 from semantic_frame_v2_1 import SparseFrameError, SparseSemanticFrame, build_sparse_frame_payload
 from semantic_state_v2_1 import SparseReduction, grounded_slots_from_query, reduce_sparse_frame
 
@@ -160,13 +161,7 @@ class SemanticOperationsOrchestratorV21:
         query: str,
         state: Mapping[str, Any] | None,
     ) -> tuple[str, CommandPlan | None, str | None, bool]:
-        """Return (route_name, trusted_plan, immediate_message, previous_scope_hint).
-
-        Only routes whose meaning is directly grounded in conversation state
-        are consumed here. Generic/FAQ classification remains available to the
-        sparse semantic normalizer because the legacy router can over-match
-        those classes on compound or underspecified event utterances.
-        """
+        """Resolve only conversation-state acts that are high-confidence."""
 
         last_results, selected_event = self._context_events(state)
         route = conversation_router.route_conversation(
@@ -234,9 +229,7 @@ class SemanticOperationsOrchestratorV21:
         capability = evaluate_capability(value)
         if not capability.allowed:
             return SemanticV21Result(
-                "unsupported",
-                "unsupported",
-                message=capability.message,
+                "unsupported", "unsupported", message=capability.message,
                 deterministic_route=f"capability:{capability.reason}",
                 latency_ms=(time.perf_counter() - started) * 1000,
             )
@@ -246,8 +239,13 @@ class SemanticOperationsOrchestratorV21:
             return SemanticV21Result("unsupported", "unsupported", message=security_message, deterministic_route="security_or_domain_guard", latency_ms=(time.perf_counter() - started) * 1000)
 
         suitability = suitability_clarification.analyze_suitability_request(value)
-        if suitability.needs_clarification:
-            return SemanticV21Result("clarification", "unsupported", message=suitability_clarification.clarification_message(value), deterministic_route="ambiguous_suitability_guard", latency_ms=(time.perf_counter() - started) * 1000)
+        if suitability.needs_clarification or needs_relational_demographic_clarification(value):
+            return SemanticV21Result(
+                "clarification", "unsupported",
+                message=suitability_clarification.clarification_message(value),
+                deterministic_route="ambiguous_suitability_guard",
+                latency_ms=(time.perf_counter() - started) * 1000,
+            )
         if suitability.should_strip_suitability_marker:
             value = suitability.sanitized_query
 
