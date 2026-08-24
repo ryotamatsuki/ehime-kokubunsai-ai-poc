@@ -173,7 +173,11 @@ class SemanticOperationsOrchestratorV21:
 
         if action == "clarify_reference":
             return action, None, "基準にするイベントを番号かイベント名で教えてみて。", False
-        if action in {"generic_scope", "scope_search"} and not event_search.looks_like_event_query(query):
+        # The trusted conversation router has already classified generic_scope
+        # and scope_search as outside the supported event-guide capability.
+        # Do not re-open that decision using looser event-query heuristics and
+        # do not spend a model call on a request the product cannot execute.
+        if action in {"generic_scope", "scope_search"}:
             return "capability_scope_guard", None, "このPoCは文化祭イベントの検索・参加案内が中心です。", False
         if action == "general_faq":
             return action, CommandPlan(flow="general_faq", slots=CommandSlots(), confidence="high"), None, False
