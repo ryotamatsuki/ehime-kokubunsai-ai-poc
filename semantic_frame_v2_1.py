@@ -1,11 +1,11 @@
 """Sparse semantic-operation contract for Semantic Operations v2.1.
 
-Only ``intent`` is required.  Every other field is omitted unless the current
-utterance actually carries that meaning.  This removes the v2 requirement for
-a 3B model to emit many unrelated empty/null fields on every turn.
-
-Natural-language variety remains the model's job; the contract itself stays
-small and finite.  Explicit event filters are still grounded by Python.
+Only ``intent`` is required. Optional operations are emitted only when the
+utterance carries that meaning. Python remains the first parser for explicit
+filters; the model may return a bounded canonical ``set`` patch only for an
+explicit filter deterministic parsing missed (for example colloquial or kana
+wording). This keeps the frame sparse without making dialect coverage a
+growing Python phrase dictionary.
 """
 
 from __future__ import annotations
@@ -15,7 +15,19 @@ import json
 from typing import Any, Mapping
 
 import experience_preferences
-from command_models import MAX_REFERENCE_INDEX
+from command_models import (
+    AGE_GROUP_VALUES,
+    AGE_INTENT_VALUES,
+    AUDIENCE_VALUES,
+    CANONICAL_MUNICIPALITIES,
+    CANONICAL_REGIONS,
+    GENRE_VALUES,
+    MAX_REFERENCE_INDEX,
+    TIME_SLOT_VALUES,
+    VENUE_VALUES,
+    CommandSlots,
+    CommandValidationError,
+)
 
 
 INTENT_VALUES = frozenset({
@@ -31,7 +43,7 @@ CLARIFICATION_VALUES = frozenset({
 DATA_GAP_VALUES = frozenset({
     "crowding", "noise", "wheelchair_access", "medical_safety",
     "parking_distance", "toilet_proximity", "weather_guarantee",
-    "social_fit", "other",
+    "social_fit", "popularity", "fame", "duration_fit", "localness", "other",
 })
 AUDIENCE_MODE_VALUES = frozenset({"family", "adult", "target"})
 UNSET_GROUP_VALUES = frozenset({
@@ -41,6 +53,12 @@ UNSET_GROUP_VALUES = frozenset({
 EXPERIENCE_CONCEPTS = frozenset(experience_preferences.EXPERIENCE_CONCEPT_IDS)
 EXPERIENCE_UNSET_VALUES = frozenset(f"experience:{value}" for value in EXPERIENCE_CONCEPTS)
 UNSET_VALUES = UNSET_GROUP_VALUES | EXPERIENCE_UNSET_VALUES
+SET_SLOT_FIELDS = frozenset({
+    "dates", "municipalities", "regions", "genres", "topics",
+    "audience", "age", "age_group", "age_intent", "venue",
+    "entry_free", "paid_only", "max_entry_fee", "reservation_required",
+    "rain_preferred", "time_slots", "time_after",
+})
 MAX_UNSET_ITEMS = 12
 MAX_EXPERIENCE_ITEMS = 6
 MAX_EVENT_NAME_LENGTH = 240
@@ -84,6 +102,22 @@ def _list(value: Any, allowed: frozenset[str], field_name: str, maximum: int) ->
     return tuple(result)
 
 
+def _canonical_set(raw: Any) -> dict[str, Any]:
+    if raw is None:
+        return {}
+    if not isinstance(raw, Mapping):
+        _fail("set must be an object")
+    unknown = set(raw) - SET_SLOT_FIELDS
+    if unknown:
+        _fail(f"set has unsupported fields: {sorted(unknown)}")
+    try:
+        slots = CommandSlots.from_dict(dict(raw))
+    except (CommandValidationError, TypeError, ValueError) as exc:
+        _fail(f"invalid canonical set patch: {exc}")
+    canonical = slots.to_dict()
+    return {str(key): canonical[str(key)] for key in raw}
+
+
 @dataclass(frozen=True)
 class SparseReference:
     kind: str
@@ -118,8 +152,7 @@ class SparseReference:
         if not isinstance(raw, Mapping):
             _fail("reference must be an object")
         allowed = {"kind", "index", "event_name"}
-        unknown = set(raw) - allowed
-        if unknown or "kind" not in raw:
+        if set(raw) - allowed or "kind" not in raw:
             _fail("reference has invalid fields")
         return cls(kind=raw["kind"], index=raw.get("index"), event_name=raw.get("event_name"))
 
@@ -136,6 +169,7 @@ class SparseReference:
 class SparseSemanticFrame:
     intent: str
     scope: str = "new"
+    set_slots: Mapping[str, Any] | None = None
     unset: tuple[str, ...] = ()
     require: tuple[str, ...] = ()
     prefer: tuple[str, ...] = ()
@@ -148,6 +182,7 @@ class SparseSemanticFrame:
     def __post_init__(self) -> None:
         object.__setattr__(self, "intent", _enum(self.intent, INTENT_VALUES, "intent"))
         object.__setattr__(self, "scope", _enum(self.scope, SCOPE_VALUES, "scope"))
+        object.__setattr__(self, "set_slots", _canonical_set(self.set_slots))
         object.__setattr__(self, "unset", _list(list(self.unset), UNSET_VALUES, "unset", MAX_UNSET_ITEMS))
         object.__setattr__(self, "require", _list(list(self.require), EXPERIENCE_CONCEPTS, "require", MAX_EXPERIENCE_ITEMS))
         object.__setattr__(self, "prefer", _list(list(self.prefer), EXPERIENCE_CONCEPTS, "prefer", MAX_EXPERIENCE_ITEMS))
@@ -171,7 +206,7 @@ class SparseSemanticFrame:
             return raw
         if not isinstance(raw, Mapping):
             _fail("sparse frame must be an object")
-        allowed = {"intent", "scope", "unset", "require", "prefer", "exclude", "reference", "clarification", "data_gap", "audience_mode"}
+        allowed = {"intent", "scope", "set", "unset", "require", "prefer", "exclude", "reference", "clarification", "data_gap", "audience_mode"}
         unknown = set(raw) - allowed
         if unknown:
             _fail(f"unknown sparse frame fields: {sorted(unknown)}")
@@ -180,6 +215,7 @@ class SparseSemanticFrame:
         return cls(
             intent=raw["intent"],
             scope=raw.get("scope", "new"),
+            set_slots=raw.get("set"),
             unset=tuple(raw.get("unset", [])),
             require=tuple(raw.get("require", [])),
             prefer=tuple(raw.get("prefer", [])),
@@ -208,6 +244,7 @@ class SparseSemanticFrame:
         result: dict[str, Any] = {"intent": self.intent}
         optional = {
             "scope": self.scope if self.scope != "new" else None,
+            "set": dict(self.set_slots or {}) or None,
             "unset": list(self.unset) or None,
             "require": list(self.require) or None,
             "prefer": list(self.prefer) or None,
@@ -224,6 +261,30 @@ class SparseSemanticFrame:
         return result
 
 
+SPARSE_SET_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "dates": {"type": "array", "maxItems": 32, "uniqueItems": True, "items": {"type": "string", "pattern": r"^\\d{4}-\\d{2}-\\d{2}$"}},
+        "municipalities": {"type": "array", "maxItems": 20, "uniqueItems": True, "items": {"type": "string", "enum": sorted(CANONICAL_MUNICIPALITIES)}},
+        "regions": {"type": "array", "maxItems": 3, "uniqueItems": True, "items": {"type": "string", "enum": sorted(CANONICAL_REGIONS)}},
+        "genres": {"type": "array", "maxItems": 8, "uniqueItems": True, "items": {"type": "string", "enum": sorted(GENRE_VALUES)}},
+        "topics": {"type": "array", "maxItems": 8, "uniqueItems": True, "items": {"type": "string", "minLength": 1, "maxLength": 64}},
+        "audience": {"type": "string", "enum": sorted(AUDIENCE_VALUES)},
+        "age": {"type": "integer", "minimum": 0, "maximum": 120},
+        "age_group": {"type": "string", "enum": sorted(AGE_GROUP_VALUES)},
+        "age_intent": {"type": "string", "enum": sorted(AGE_INTENT_VALUES)},
+        "venue": {"type": "string", "enum": sorted(VENUE_VALUES)},
+        "entry_free": {"type": "boolean"},
+        "paid_only": {"type": "boolean"},
+        "max_entry_fee": {"type": "integer", "minimum": 0},
+        "reservation_required": {"type": "boolean"},
+        "rain_preferred": {"type": "boolean"},
+        "time_slots": {"type": "array", "maxItems": 3, "uniqueItems": True, "items": {"type": "string", "enum": sorted(TIME_SLOT_VALUES)}},
+        "time_after": {"type": "integer", "minimum": 0, "maximum": 1440},
+    },
+}
+
 SPARSE_FRAME_JSON_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
@@ -231,6 +292,7 @@ SPARSE_FRAME_JSON_SCHEMA: dict[str, Any] = {
     "properties": {
         "intent": {"type": "string", "enum": sorted(INTENT_VALUES)},
         "scope": {"type": "string", "enum": sorted(SCOPE_VALUES)},
+        "set": SPARSE_SET_SCHEMA,
         "unset": {"type": "array", "maxItems": MAX_UNSET_ITEMS, "uniqueItems": True, "items": {"type": "string", "enum": sorted(UNSET_VALUES)}},
         "require": {"type": "array", "maxItems": MAX_EXPERIENCE_ITEMS, "uniqueItems": True, "items": {"type": "string", "enum": sorted(EXPERIENCE_CONCEPTS)}},
         "prefer": {"type": "array", "maxItems": MAX_EXPERIENCE_ITEMS, "uniqueItems": True, "items": {"type": "string", "enum": sorted(EXPERIENCE_CONCEPTS)}},
@@ -256,40 +318,50 @@ def build_sparse_frame_system_prompt() -> str:
     concepts = ", ".join(sorted(EXPERIENCE_CONCEPTS))
     unset_values = ", ".join(sorted(UNSET_VALUES))
     return f"""あなたは文化祭イベント案内の意味正規化器です。回答文やイベント事実は作りません。
-JSONオブジェクト1個だけを返してください。必須キーは intent だけです。意味がない任意キーは出力しません。
+JSONオブジェクト1個だけを返してください。必須キーは intent だけで、意味がない任意キーは出力しません。
 
 intent: search/count/detail/next/similar/pair/explain_search/explain_result/faq/unsupported/clarify
-前回結果をさらに絞る意味なら scope=previous。新規探索はscopeを省略します。
-条件を外す意味は unset を使います。反対条件を設定してはいけません。
-unset values: {unset_values}
+前回結果をさらに絞る意味なら scope=previous。新規探索ではscopeを省略します。
+Pythonが既に抽出した明示条件は入力のgroundedにあります。groundedを繰り返してはいけません。
+ただし利用者が明示した条件なのに、表記揺れ・口語・方言等でgroundedから欠けている場合だけ、setに正規形を補います。
+setは日付、市町、地域、ジャンル/テーマ、対象、料金、予約、屋内外、雨、時間だけです。利用者が言っていない条件を推測してはいけません。
+条件を外す意味は unset を使い、反対条件をSETしてはいけません。unset values: {unset_values}
 Experienceの必須/希望/除外だけ require/prefer/exclude を使います。values: {concepts}
-特定のExperienceだけ解除する場合は unset の experience:<concept> を使い、全部解除だけ experience_all を使います。
-日付、市町、地域、料金、予約、屋内外、時間、ジャンルは出力しません。後段Pythonが明示表現から確定します。
+特定Experienceだけ解除する場合は unset の experience:<concept>、全部解除だけ experience_all を使います。
 ordinal/event_name/selected/last_result の参照が必要なときだけ reference を出します。
 曖昧で確認が必要なら intent=clarify と clarification を出します。
-DBに根拠がない混雑・騒音・医学的安全性・駐車距離・トイレ近接・天候保証・社会的適性は data_gap を出します。
-同行者の年齢説明と検索対象年齢を混同しないでください。家族・世代混合の同行者説明は audience_mode=family、明示的な大人向けはadult、明示的な対象年齢はtargetです。
+DBに根拠がない混雑・騒音・医学的安全性・駐車距離・トイレ近接・天候保証・人気/知名度・所要時間適合・社会的適性は data_gap を出します。
+同行者の年齢説明と検索対象年齢を混同しません。家族・世代混合の同行者説明は audience_mode=family、明示的な大人向けはadult、明示的な対象年齢はtargetです。
 通常の言い換え、口語、方言は語句一致ではなく意味で分類してください。
 """
 
 
-def build_sparse_frame_payload(query: str, state: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    safe: dict[str, Any] = {}
+def build_sparse_frame_payload(
+    query: str,
+    state: Mapping[str, Any] | None = None,
+    grounded: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    safe_state: dict[str, Any] = {}
     if isinstance(state, Mapping):
         result_ids = state.get("last_result_ids")
         if isinstance(result_ids, (list, tuple)):
-            safe["last_result_ids"] = [str(item)[:64] for item in list(result_ids)[:32]]
+            safe_state["last_result_ids"] = [str(item)[:64] for item in list(result_ids)[:32]]
         if state.get("selected_event_id") not in (None, ""):
-            safe["selected_event_id"] = str(state.get("selected_event_id"))[:64]
-        safe["has_previous_results"] = bool(safe.get("last_result_ids"))
-        safe["has_previous_command"] = isinstance(state.get("last_command"), Mapping)
-    return {"query": str(query).strip()[:1200], "state": safe}
+            safe_state["selected_event_id"] = str(state.get("selected_event_id"))[:64]
+        safe_state["has_previous_results"] = bool(safe_state.get("last_result_ids"))
+        safe_state["has_previous_command"] = isinstance(state.get("last_command"), Mapping)
+    safe_grounded = {
+        str(key): value
+        for key, value in dict(grounded or {}).items()
+        if str(key) in SET_SLOT_FIELDS or str(key).startswith("experience_")
+    }
+    return {"query": str(query).strip()[:1200], "state": safe_state, "grounded": safe_grounded}
 
 
 __all__ = [
     "AUDIENCE_MODE_VALUES", "CLARIFICATION_VALUES", "DATA_GAP_VALUES",
     "EXPERIENCE_CONCEPTS", "INTENT_VALUES", "REFERENCE_KIND_VALUES",
-    "SPARSE_FRAME_JSON_SCHEMA", "SCOPE_VALUES", "SparseFrameError",
-    "SparseReference", "SparseSemanticFrame", "UNSET_VALUES",
-    "build_sparse_frame_payload", "build_sparse_frame_system_prompt",
+    "SET_SLOT_FIELDS", "SPARSE_FRAME_JSON_SCHEMA", "SPARSE_SET_SCHEMA",
+    "SCOPE_VALUES", "SparseFrameError", "SparseReference", "SparseSemanticFrame",
+    "UNSET_VALUES", "build_sparse_frame_payload", "build_sparse_frame_system_prompt",
 ]
