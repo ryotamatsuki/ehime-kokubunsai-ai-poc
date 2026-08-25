@@ -57,7 +57,8 @@ jobs:
                   with tempfile.NamedTemporaryFile(mode='w+', encoding='utf-8') as response_file:
                       completed = subprocess.run(
                           [
-                              'modal', 'curl', '-sS', '-X', 'POST', url,
+                              'modal', 'curl', url,
+                              '-sS', '-X', 'POST',
                               '-H', 'Content-Type: application/json',
                               '-d', payload,
                               '-o', response_file.name,
