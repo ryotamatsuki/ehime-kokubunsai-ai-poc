@@ -1,14 +1,15 @@
 """Observable frozen-v1 evaluator for Semantic Operations v2.2.
 
 This evaluator is deliberately restricted to the already-exposed 100-case v1
-regression suite.  It does not discover, import, decompress or execute the
-sealed 200-case holdout.  The live backend may attach uncertainty telemetry,
+regression suite. It does not discover, import, decompress or execute the
+sealed 200-case holdout. The live backend may attach uncertainty telemetry,
 but no uncertainty threshold affects behavior in this phase.
 """
 
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+import statistics
 from typing import Any, Callable, Mapping, Sequence
 
 from app_config import POC_REFERENCE_DATE
@@ -20,6 +21,27 @@ from unexpected_utterances_v2_1_eval import (
     _normalize,
     load_frozen_v1_dataset,
 )
+
+
+def _numeric_summary(values: Sequence[float]) -> dict[str, float | None]:
+    data = sorted(float(value) for value in values)
+    if not data:
+        return {"mean": None, "median": None, "p95": None, "min": None, "max": None}
+    if len(data) == 1:
+        p95 = data[0]
+    else:
+        position = (len(data) - 1) * 0.95
+        lower = int(position)
+        upper = min(lower + 1, len(data) - 1)
+        weight = position - lower
+        p95 = data[lower] * (1.0 - weight) + data[upper] * weight
+    return {
+        "mean": round(statistics.fmean(data), 6),
+        "median": round(statistics.median(data), 6),
+        "p95": round(p95, 6),
+        "min": round(data[0], 6),
+        "max": round(data[-1], 6),
+    }
 
 
 def evaluate_case_v22(
@@ -179,7 +201,7 @@ def summarize_v22(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "uncertainty": {
             "fields_observed": uncertainty_fields,
             "field_margin_samples": len(uncertainty_margins),
-            "field_margin": _latency_summary(uncertainty_margins),
+            "field_margin": _numeric_summary(uncertainty_margins),
             "behavioral_threshold_enabled": False,
         },
         "latency": {
