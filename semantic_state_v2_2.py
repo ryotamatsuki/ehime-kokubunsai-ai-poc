@@ -40,7 +40,18 @@ class AtomicReduction:
 
 
 def grounded_slots_from_query_v22(query: str, reference_date: date = POC_REFERENCE_DATE) -> dict[str, Any]:
-    return grounded_slots_from_query(normalize_query_for_grounding(query), reference_date)
+    values = grounded_slots_from_query(normalize_query_for_grounding(query), reference_date)
+    # A canonical genre explicitly present in the query is also a safe thematic
+    # soft term. Keeping it in topics preserves the existing command contract
+    # without asking the model to emit arbitrary free text.
+    genres = list(values.get("genres") or [])
+    topics = list(values.get("topics") or [])
+    for genre in genres:
+        if genre not in topics:
+            topics.append(genre)
+    if topics:
+        values["topics"] = topics
+    return values
 
 
 def _has_any(source: Mapping[str, Any], *names: str) -> bool:
@@ -133,17 +144,20 @@ def atomic_to_sparse_frame(
 
     for concept, action in frame.experience.items():
         grounded_has = _experience_grounded(grounded, concept)
+        # Negative/release semantics must outrank a lexical positive match from
+        # the deterministic parser. This is exactly the residual semantic job
+        # assigned to the atomic classifier.
         if action == "unset":
             unset.append(f"experience:{concept}")
+        elif action == "exclude":
+            exclude.append(concept)
         elif grounded_has:
-            if action != "none":
+            if action not in {"none", "exclude", "unset"}:
                 ignored.append(f"experience.{concept}:grounded_wins")
         elif action == "require":
             require.append(concept)
         elif action == "prefer":
             prefer.append(concept)
-        elif action == "exclude":
-            exclude.append(concept)
 
     scope = "previous" if previous_scope or frame.scope == "previous" else "new"
     clarification = None if frame.clarification == "none" else frame.clarification
@@ -257,7 +271,7 @@ def fail_soft_reduce(
     """
 
     normalized = normalize_query_for_grounding(query)
-    grounded = grounded_slots_from_query(normalized, reference_date)
+    grounded = grounded_slots_from_query_v22(query, reference_date)
     residual = event_search.unknown_query_residuals(normalized)
     has_typed_grounding = _has_any(grounded, *_FAIL_SOFT_TYPED_FIELDS)
     has_context = bool(isinstance(state, Mapping) and (state.get("last_result_ids") or state.get("last_command")))
