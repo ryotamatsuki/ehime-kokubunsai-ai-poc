@@ -1,0 +1,77 @@
+name: Semantic v2.2 Atomic Preflight
+
+on:
+  push:
+    branches:
+      - feature/semantic-operations-v2-2-atomic-pre-eval
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: semantic-v2-2-preflight-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install test dependencies
+        run: python -m pip install --upgrade pytest 'lm-format-enforcer>=0.10,<1'
+      - name: Compile
+        run: python -m compileall -q .
+      - name: Run deterministic regression
+        run: PYTHONPATH=. python -m pytest -q
+      - name: Validate atomic LMFE schema
+        run: |
+          PYTHONPATH=. python - <<'PY'
+          from lmformatenforcer import JsonSchemaParser
+          from semantic_atomic_v2_2 import ATOMIC_FRAME_JSON_SCHEMA
+          JsonSchemaParser(ATOMIC_FRAME_JSON_SCHEMA)
+          print('LMFE atomic schema: PASS')
+          PY
+      - name: Run v2.1 frozen-v1 oracle ceiling
+        run: PYTHONPATH=. python semantic_oracle_ceiling_v2_1.py
+      - name: Run v2.2 frozen-v1 oracle ceiling
+        run: PYTHONPATH=. python semantic_oracle_ceiling_v2_2.py
+      - name: Verify v2.2 source cannot open sealed holdout
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          for path in (
+              'semantic_atomic_v2_2.py',
+              'semantic_state_v2_2.py',
+              'semantic_orchestrator_v2_2.py',
+              'semantic_oracle_ceiling_v2_2.py',
+          ):
+              source = Path(path).read_text(encoding='utf-8')
+              assert 'tests/data/unexpected_utterances_holdout_v2_1' not in source
+              assert 'payload.json.gz' not in source
+          print('sealed-holdout execution boundary: PASS')
+          PY
+      - name: Verify sealed holdout remains opaque
+        run: |
+          python - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+          root = Path('tests/data/unexpected_utterances_holdout_v2_1')
+          manifest = json.loads((root / 'manifest.json').read_text(encoding='utf-8'))
+          payload = root / manifest['payload']
+          digest = hashlib.sha256(payload.read_bytes()).hexdigest()
+          assert manifest['sealed_before_v2_1_implementation'] is True
+          assert manifest['total_cases'] == 200
+          assert digest == manifest['payload_sha256']
+          print(json.dumps({
+              'version': manifest['version'],
+              'total_cases': manifest['total_cases'],
+              'payload_sha256': digest,
+              'opened': False,
+          }, ensure_ascii=False, sort_keys=True))
+          PY
