@@ -70,22 +70,33 @@ def test_verifier_rejects_previous_scope_without_trusted_context():
     assert checked.reason == "previous_scope_without_context"
 
 
-def test_verifier_normalizes_release_to_previous_scope():
-    checked = verify_atomic_frame(_frame(scope="new", fee="release"), state=_state(), grounded={})
+def test_new_scope_release_can_cancel_current_grounding_without_context():
+    checked = verify_atomic_frame(
+        _frame(scope="new", fee="release"),
+        state=None,
+        grounded={"entry_free": True},
+    )
+    assert checked.accepted is True
+    assert checked.frame is not None
+    assert checked.frame.scope == "new"
+    assert checked.frame.fee == "release"
+
+
+def test_previous_scope_release_keeps_prior_state_mutation():
+    checked = verify_atomic_frame(_frame(scope="previous", fee="release"), state=_state(), grounded={})
     assert checked.accepted is True
     assert checked.frame is not None
     assert checked.frame.scope == "previous"
     assert checked.frame.fee == "release"
-    assert "scope:release_implies_previous" in checked.normalized
 
 
-def test_verifier_neutralizes_release_when_no_prior_constraint_of_that_group():
+def test_verifier_neutralizes_release_only_when_it_has_no_effect():
     state = _state(entry_free=None, paid_only=None, max_entry_fee=None)
     checked = verify_atomic_frame(_frame(scope="previous", fee="release"), state=state, grounded={})
     assert checked.accepted is True
     assert checked.frame is not None
     assert checked.frame.fee == "none"
-    assert "fee:release_without_prior_constraint" in checked.ignored
+    assert "fee:release_without_effect" in checked.ignored
 
 
 def test_verifier_rejects_conflicting_municipality_region_atoms():
@@ -136,6 +147,17 @@ def test_verifier_preserves_negative_experience_against_positive_lexical_groundi
     assert checked.accepted is True
     assert checked.frame is not None
     assert checked.frame.experience["hands_on"] == "exclude"
+
+
+def test_experience_unset_can_cancel_current_lexical_grounding_without_context():
+    checked = verify_atomic_frame(
+        _frame(experience={"walk_explore": "unset"}),
+        state=None,
+        grounded={"experience_required": ["walk_explore"]},
+    )
+    assert checked.accepted is True
+    assert checked.frame is not None
+    assert checked.frame.experience["walk_explore"] == "unset"
 
 
 def test_orchestrator_fail_softs_semantic_verifier_rejection_without_second_model_call():
