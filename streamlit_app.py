@@ -23,6 +23,8 @@ import event_recommendation
 import experience_preferences
 import recommendation_pending
 import conversation_recovery
+import semantic_model_registry
+from semantic_v2_2_ui import SemanticEndpointConfig, run_semantic_v22
 from command_observability import ModalCallError, TurnObservation, build_sha, modal_status_class
 from agent_planner import ModalConfig
 from conversation_router import route_conversation
@@ -352,6 +354,25 @@ def _required_secret(name: str) -> str:
         st.error("このPoCは現在利用できません。管理者が設定を確認してください。")
         st.stop()
     return value.strip()
+
+
+def _optional_secret(name: str) -> str | None:
+    """Read an optional project secret without making rollout all-or-nothing."""
+
+    try:
+        value = st.secrets.get(name)
+    except (KeyError, FileNotFoundError):
+        return None
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return value.strip()
+
+
+def _configured_semantic_models():
+    try:
+        return semantic_model_registry.configured_model_specs(st.secrets)
+    except (KeyError, FileNotFoundError):
+        return ()
 
 
 def _validate_modal_url(url: str) -> str:
@@ -765,6 +786,70 @@ def _call_new_command(
     command_payload = _command_plan_payload(command) if command is not None else None
     if command is not None and command_payload is None:
         return None
+
+    # Semantic Operations v2.2 is the common residual-language architecture.
+    # The selector changes only the remote Atomic classifier; deterministic
+    # quick actions and pending explicit CommandPlans remain local/trusted.
+    configured_models = _configured_semantic_models()
+    if command_payload is None and not skip_generation and configured_models:
+        configured_by_key = {spec.key: spec for spec in configured_models}
+        selected_key = str(st.session_state.get("semantic_model_key") or "")
+        selected_model = configured_by_key.get(selected_key) or configured_models[0]
+        endpoint_url = _optional_secret(selected_model.modal_url_secret)
+        if endpoint_url is None:
+            return _CommandOutcome(
+                flow="unsupported",
+                slots={},
+                command={"flow": "unsupported", "slots": {}, "confidence": "low"},
+                events=[],
+                near_events=[],
+                all_event_ids=[],
+                all_near_event_ids=[],
+                pairs=[],
+                message=BACKEND_FAILURE_MESSAGE,
+                handled=True,
+            )
+        try:
+            semantic_result = run_semantic_v22(
+                query,
+                state,
+                SemanticEndpointConfig(
+                    model=selected_model,
+                    url=endpoint_url,
+                    key=modal_config.key,
+                    secret=modal_config.secret,
+                ),
+                events=event_search.load_events(),
+            )
+            normalized = _normalize_command_outcome(semantic_result, None)
+            if normalized is not None:
+                return normalized
+        except Exception:
+            observation = TurnObservation(
+                query,
+                has_search_context=bool(state.get("has_last_search_context")),
+                last_result_count=int(state.get("last_result_count") or 0),
+            )
+            observation.semantic_command_called = True
+            observation.mark_fallback(
+                "semantic_v22_backend_failure",
+                error_type="semantic_v22_backend_failure",
+            )
+            observation.emit()
+        # Never switch models silently when the user explicitly selected a
+        # v2.2 backend.  A backend failure is surfaced as a handled PoC error.
+        return _CommandOutcome(
+            flow="unsupported",
+            slots={},
+            command={"flow": "unsupported", "slots": {}, "confidence": "low"},
+            events=[],
+            near_events=[],
+            all_event_ids=[],
+            all_near_event_ids=[],
+            pairs=[],
+            message=BACKEND_FAILURE_MESSAGE,
+            handled=True,
+        )
 
     # Current Agent D public API.  Passing a JSON mapping is intentional: the
     # repository's command_orchestrator owns its own validated CommandPlan
@@ -2236,6 +2321,39 @@ if "last_pair_results" not in st.session_state:
 
 with st.sidebar:
     with st.container(key="iyoshirube-sidebar"):
+        configured_semantic_models = _configured_semantic_models()
+        if configured_semantic_models:
+            configured_keys = [spec.key for spec in configured_semantic_models]
+            if st.session_state.get("semantic_model_key") not in configured_keys:
+                preferred = semantic_model_registry.DEFAULT_MODEL_KEY
+                st.session_state.semantic_model_key = (
+                    preferred if preferred in configured_keys else configured_keys[0]
+                )
+            selected_model_key = st.selectbox(
+                "AIモデル",
+                options=configured_keys,
+                format_func=lambda key: semantic_model_registry.get_model_spec(key).label,
+                key="semantic_model_key",
+            )
+            active_model_key = st.session_state.get("active_semantic_model_key")
+            if active_model_key is None:
+                st.session_state.active_semantic_model_key = selected_model_key
+            elif active_model_key != selected_model_key:
+                st.session_state.active_semantic_model_key = selected_model_key
+                selected_label = semantic_model_registry.get_model_spec(selected_model_key).label
+                st.session_state.model_changed_notice = (
+                    f"AIモデルを{selected_label}に切り替えました。会話をリセットしました。"
+                )
+                _reset()
+            notice = st.session_state.pop("model_changed_notice", None)
+            if notice:
+                st.info(str(notice))
+            selected_spec = semantic_model_registry.get_model_spec(selected_model_key)
+            st.caption(f"{selected_spec.description}")
+            st.caption("Semantic Operations v2.2 / LMFE。意味分類モデルだけを切り替えます。")
+        else:
+            st.caption("Semantic v2.2 endpoint未設定。現在は既存PoCバックエンドを使用します。")
+        st.divider()
         st.markdown("### :material/list: 質問の例")
         quick_action_icons = {
             "今日のイベント": ":material/calendar_month:",
