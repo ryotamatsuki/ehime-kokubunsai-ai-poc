@@ -81,6 +81,14 @@ def atomic_to_sparse_frame(
 ) -> tuple[SparseSemanticFrame, dict[str, Any], dict[str, Any], tuple[str, ...]]:
     grounded = grounded_slots_from_query_v22(query, reference_date)
     set_slots: dict[str, Any] = {}
+    # v2.1's reducer deliberately reparses the query. Its parser can recover a
+    # canonical genre but intentionally keeps genre and topic separate. When
+    # v2.2 has deterministically identified a canonical genre, carry the same
+    # bounded value through the sparse supplement so both existing contract
+    # fields survive without asking the model for arbitrary free text.
+    if grounded.get("genres"):
+        set_slots["genres"] = list(grounded.get("genres") or [])
+        set_slots["topics"] = list(grounded.get("topics") or grounded.get("genres") or [])
     unset: list[str] = []
     require: list[str] = []
     prefer: list[str] = []
