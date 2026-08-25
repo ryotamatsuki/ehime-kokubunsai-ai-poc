@@ -55,6 +55,22 @@ jobs:
           assert result['machine_pass'] == 100, result['failed']
           print('v2.2 oracle: 100/100 PASS')
           PY
+      - name: Verify v2.2 architecture freeze
+        run: |
+          python - <<'PY'
+          import json, subprocess
+          from pathlib import Path
+          freeze = json.loads(Path('docs/semantic_operations_v2_2_eval_freeze.json').read_text(encoding='utf-8'))
+          assert freeze['status'] == 'ready_before_live_run'
+          assert freeze['v2_2_contract']['few_shot_examples'] == 5
+          assert freeze['v2_2_contract']['model_calls_per_residual_turn_max'] == 1
+          assert freeze['v2_2_contract']['repair_generation'] is False
+          assert freeze['v2_2_contract']['uncertainty_behavioral_threshold_enabled'] is False
+          for path, expected in freeze['critical_git_blobs'].items():
+              actual = subprocess.check_output(['git', 'hash-object', path], text=True).strip()
+              assert actual == expected, (path, expected, actual)
+          print('v2.2 frozen architecture blobs: PASS')
+          PY
       - name: Verify v2.2 source cannot open sealed holdout
         run: |
           python - <<'PY'
@@ -94,9 +110,13 @@ jobs:
           manifest = json.loads((root / 'manifest.json').read_text(encoding='utf-8'))
           payload = root / manifest['payload']
           digest = hashlib.sha256(payload.read_bytes()).hexdigest()
+          freeze = json.loads(Path('docs/semantic_operations_v2_2_eval_freeze.json').read_text(encoding='utf-8'))
           assert manifest['sealed_before_v2_1_implementation'] is True
           assert manifest['total_cases'] == 200
           assert digest == manifest['payload_sha256']
+          assert digest == freeze['sealed_holdout']['payload_sha256']
+          assert freeze['sealed_holdout']['opened'] is False
+          assert freeze['sealed_holdout']['runner_present'] is False
           print(json.dumps({
               'version': manifest['version'],
               'total_cases': manifest['total_cases'],
