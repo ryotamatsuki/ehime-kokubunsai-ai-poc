@@ -1,11 +1,11 @@
 """Pure-Python semantic verifier for Semantic Operations v2.2.
 
-The atomic classifier is untrusted.  JSON-schema validity is necessary but not
+The atomic classifier is untrusted. JSON-schema validity is necessary but not
 sufficient: an atom must also be compatible with trusted deterministic
-extraction and the bounded conversation state.  This module performs that
-second check without another model call.
+extraction and bounded conversation state. This module performs that second
+check without another model call.
 
-The verifier never invents event facts or natural-language meaning.  It only
+The verifier never invents event facts or natural-language meaning. It only
 normalizes finite control-state contradictions, ignores redundant model atoms,
 or rejects unsafe transitions so the orchestrator can fail-soft.
 """
@@ -95,10 +95,15 @@ def verify_atomic_frame(
 ) -> AtomicVerification:
     """Verify one parsed atomic frame against trusted state and grounding.
 
-    This is a semantic/state verifier, not an utterance classifier.  It does
-    not look for phrases in the user query.  When a safe deterministic value
-    already exists, a positive model atom is neutralized.  Release operations
-    are allowed only when a corresponding previous constraint exists.
+    ``release``/``unset`` has two legitimate roles in the v2.2 contract:
+
+    * with ``scope=previous`` it removes a prior constraint;
+    * with ``scope=new`` it cancels a deterministic lexical false-positive in
+      the current utterance (for example "無料じゃなくてもいい").
+
+    Therefore release does *not* imply previous scope. This distinction is
+    essential for negation handling and keeps the verifier independent of
+    utterance-specific phrase rules.
     """
 
     grounded_values = dict(grounded or {})
@@ -112,28 +117,9 @@ def verify_atomic_frame(
     if frame.scope == "previous" and not has_context:
         return AtomicVerification(False, None, reason="previous_scope_without_context")
 
-    # A release/unset operation is inherently a previous-state operation.  If
-    # the classifier forgot scope=previous but trusted state exists, normalize
-    # the scope rather than discarding the otherwise valid semantic action.
-    has_release = any(
-        value == "release"
-        for value in (
-            frame.municipality,
-            frame.region,
-            frame.fee,
-            frame.reservation,
-            frame.venue,
-            frame.rain,
-            frame.audience_mode,
-        )
-    ) or any(value == "unset" for value in experience.values())
-    if has_release and not has_context:
-        return AtomicVerification(False, None, reason="release_without_context")
-    if has_release and values["scope"] != "previous":
-        values["scope"] = "previous"
-        normalized.append("scope:release_implies_previous")
-
     # Trusted current-turn grounding wins over positive model supplements.
+    # Negative/release atoms are intentionally left intact because their job
+    # can be to cancel a lexical positive extracted from the same utterance.
     if _grounded_has(grounded_values, "municipalities", "regions"):
         if values["municipality"] not in {"none", "release"}:
             values["municipality"] = "none"
@@ -154,8 +140,8 @@ def verify_atomic_frame(
         values["rain"] = "none"
         ignored.append("rain:grounded_wins")
 
-    # A municipality is more specific than its containing region.  If the two
-    # model atoms disagree, reject instead of silently picking one.
+    # A municipality is more specific than its containing region. If the two
+    # positive model atoms disagree, reject instead of silently picking one.
     municipality = str(values["municipality"])
     region = str(values["region"])
     if municipality not in {"none", "release"} and region not in {"none", "release"}:
@@ -165,8 +151,9 @@ def verify_atomic_frame(
         values["region"] = "none"
         normalized.append("region:municipality_is_more_specific")
 
-    # No-op releases are neutralized.  They should not turn a valid search into
-    # a state mutation when there is nothing of that type to remove.
+    # A release is a no-op only if there is neither a previous constraint nor
+    # a current deterministic grounding to cancel. Keep current-turn releases
+    # even on a new search; unset-last in the reducer removes lexical matches.
     release_groups = {
         "fee": ("entry_free", "paid_only", "max_entry_fee"),
         "reservation": ("reservation_required",),
@@ -175,28 +162,39 @@ def verify_atomic_frame(
         "audience_mode": ("audience", "age", "age_group", "age_intent"),
     }
     for atom, slot_names in release_groups.items():
-        if values[atom] == "release" and not _has_prior(previous, *slot_names):
+        if (
+            values[atom] == "release"
+            and not _has_prior(previous, *slot_names)
+            and not _grounded_has(grounded_values, *slot_names)
+        ):
             values[atom] = "none"
-            ignored.append(f"{atom}:release_without_prior_constraint")
+            ignored.append(f"{atom}:release_without_effect")
 
     if values["municipality"] == "release" or values["region"] == "release":
-        if not _has_prior(previous, "municipalities", "regions"):
+        if (
+            not _has_prior(previous, "municipalities", "regions")
+            and not _grounded_has(grounded_values, "municipalities", "regions")
+        ):
             if values["municipality"] == "release":
                 values["municipality"] = "none"
             if values["region"] == "release":
                 values["region"] = "none"
-            ignored.append("location:release_without_prior_constraint")
+            ignored.append("location:release_without_effect")
 
     for concept, action in list(experience.items()):
         if action in {"require", "prefer"} and _experience_grounded(grounded_values, concept):
             experience[concept] = "none"
             ignored.append(f"experience.{concept}:grounded_wins")
-        elif action == "unset" and not _experience_prior(previous, concept):
+        elif (
+            action == "unset"
+            and not _experience_prior(previous, concept)
+            and not _experience_grounded(grounded_values, concept)
+        ):
             experience[concept] = "none"
-            ignored.append(f"experience.{concept}:unset_without_prior_constraint")
+            ignored.append(f"experience.{concept}:unset_without_effect")
     values["experience"] = experience
 
-    # Clarification is a control action.  A model may identify the reason but
+    # Clarification is a control action. A model may identify the reason but
     # forget to align the intent; normalize the finite control fields.
     if values["clarification"] != "none" and values["intent"] != "clarify":
         values["intent"] = "clarify"
