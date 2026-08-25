@@ -55,9 +55,6 @@ def _experience_grounded(source: Mapping[str, Any], concept: str) -> bool:
 
 
 def _sanitize_intent(frame: AtomicSemanticFrame, grounded: Mapping[str, Any], previous_scope: bool) -> str:
-    # Reference/detail/explanation acts are removed from the model vocabulary in
-    # v2.2 and resolved before the model. For residual turns with explicit
-    # grounded filters, a stray faq/unsupported label must not hijack a search.
     if (grounded or previous_scope) and frame.intent in {"faq", "unsupported"} and frame.data_gap == "none" and frame.clarification == "none":
         return "search"
     return frame.intent
@@ -251,44 +248,26 @@ def fail_soft_reduce(
     previous_scope: bool = False,
     reason: str = "atomic_frame_invalid",
 ) -> AtomicReduction:
-    """Preserve only trusted typed grounding after a classifier failure.
+    """Preserve trusted typed grounding after a classifier failure.
 
-    Free-text topics are deliberately not enough for automatic execution: a
-    phrase such as "quiet" can look like a keyword while actually expressing
-    an evidence-bound suitability condition. Fully typed deterministic filters
-    may still execute. Otherwise v2.2 asks for clarification instead of
-    discarding known slots or inventing the missing meaning.
+    The fallback never treats arbitrary free-text topics as fully understood.
+    If the deterministic parser has typed filters, they may execute only when
+    no residual text remains. A trusted previous-scope operation may also be
+    retained. Otherwise the safe fallback is clarification.
     """
 
     normalized = normalize_query_for_grounding(query)
     grounded = grounded_slots_from_query(normalized, reference_date)
-    analysis = event_search.analyze_query_terms(normalized)
+    residual = event_search.unknown_query_residuals(normalized)
     has_typed_grounding = _has_any(grounded, *_FAIL_SOFT_TYPED_FIELDS)
-    uncovered_topic = bool(analysis.known_topics and not grounded.get("genres"))
     has_context = bool(isinstance(state, Mapping) and (state.get("last_result_ids") or state.get("last_command")))
     scope = "previous" if previous_scope and has_context else "new"
 
-    if analysis.unknown_residual or uncovered_topic:
+    if residual or (not has_typed_grounding and scope != "previous"):
         return AtomicReduction(
             status="clarification",
             frame=None,
             message="一部の条件を確実に解釈できませんでした。条件を少し言い換えて教えてみて。",
-            grounded_slots=grounded,
-            applied_atoms={},
-            normalized_query=normalized,
-            fail_soft=True,
-            fail_soft_reason=reason,
-        )
-
-    # A generic recommendation with no semantic residue is a valid broad
-    # search. Otherwise require either typed grounding or a trusted previous
-    # scope before executing after model failure.
-    generic_broad = not analysis.known_topics and not analysis.unknown_residual
-    if not (has_typed_grounding or generic_broad or scope == "previous"):
-        return AtomicReduction(
-            status="clarification",
-            frame=None,
-            message="条件を確実に解釈できませんでした。もう少し具体的に教えてみて。",
             grounded_slots=grounded,
             applied_atoms={},
             normalized_query=normalized,
