@@ -1,0 +1,55 @@
+name: Deploy selectable Semantic v2.2 backends
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/model-selector-llmjp-v22
+    paths:
+      - semantic_v2_2_multimodel_backend.py
+      - semantic_model_registry.py
+      - semantic_atomic_v2_2.py
+      - semantic_prompt_v2_2.py
+      - .github/workflows/modal-v2-2-multimodel-deploy.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: semantic-v2-2-multimodel-deploy-v2
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ehime-kokubunsai-ai-poc
+    steps:
+      - name: Check out model-selector branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/model-selector-llmjp-v22
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deployment dependencies
+        run: python -m pip install --upgrade modal 'fastapi[standard]' pytest 'lm-format-enforcer>=0.10,<1'
+
+      - name: Compile backend contract
+        run: python -m compileall -q semantic_v2_2_multimodel_backend.py semantic_model_registry.py semantic_atomic_v2_2.py semantic_prompt_v2_2.py
+
+      - name: Verify model registry and v2.2 contract tests
+        run: |
+          PYTHONPATH=. python -m pytest -q \
+            tests/test_semantic_model_registry.py \
+            tests/test_semantic_v2_2_multimodel_backend_contract.py \
+            tests/test_semantic_v2_2_prompt_verifier.py \
+            tests/test_semantic_v2_2.py
+
+      - name: Deploy selectable Semantic v2.2 endpoints
+        env:
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+        run: modal deploy semantic_v2_2_multimodel_backend.py
