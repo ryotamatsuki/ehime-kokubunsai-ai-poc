@@ -1,0 +1,59 @@
+name: Post-fix model-selector QA
+
+on:
+  push:
+    branches:
+      - feature/model-selector-llmjp-v22
+    paths:
+      - .github/workflows/model-selector-postfix-qa.yml
+
+permissions:
+  contents: read
+
+jobs:
+  qa:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/model-selector-llmjp-v22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          python -m pip install -r requirements.txt
+          python -m pip install 'lm-format-enforcer>=0.10,<1'
+      - name: Compile all Python sources
+        run: python -m compileall -q .
+      - name: Run full pytest suite
+        run: PYTHONPATH=. python -m pytest -q
+      - name: Verify v2.2 oracle ceiling
+        run: |
+          PYTHONPATH=. python - <<'PY'
+          from semantic_oracle_ceiling_v2_2 import evaluate_oracle_v22
+          result = evaluate_oracle_v22()
+          assert result['cases'] == 100
+          assert result['machine_pass'] == 100, result['failed']
+          print('v2.2 oracle: 100/100 PASS')
+          PY
+      - name: Verify redirect-safe UI contract
+        run: |
+          PYTHONPATH=. python - <<'PY'
+          from semantic_v2_2_ui import MAX_MODAL_RESULT_REDIRECTS
+          assert 1 <= MAX_MODAL_RESULT_REDIRECTS <= 8
+          print('Modal result redirect contract: PASS')
+          PY
+      - name: Verify sealed holdout remains opaque
+        run: |
+          python - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+          root = Path('tests/data/unexpected_utterances_holdout_v2_1')
+          manifest = json.loads((root / 'manifest.json').read_text(encoding='utf-8'))
+          payload = root / manifest['payload']
+          digest = hashlib.sha256(payload.read_bytes()).hexdigest()
+          assert digest == manifest['payload_sha256']
+          assert digest == 'c844dda17248c0e7f16cd2985652e62bb0f8b601bf21196d6801479580899c92'
+          print(json.dumps({'opened': False, 'sha256': digest}, ensure_ascii=False))
+          PY
