@@ -16,14 +16,18 @@ def test_multimodel_backend_keeps_one_atomic_contract_for_both_models():
     assert 'max_new_tokens=FRAME_MAX_NEW_TOKENS' in source
 
 
-def test_each_model_has_an_independent_t4_endpoint():
+def test_each_model_has_an_independent_t4_endpoint_and_volume():
     source = Path("semantic_v2_2_multimodel_backend.py").read_text(encoding="utf-8")
     assert "class SarashinaSemanticV22" in source
     assert "class LlmJpSemanticV22" in source
     assert source.count('gpu="T4"') == 2
     assert source.count('@modal.fastapi_endpoint(method="POST", requires_proxy_auth=True)') == 2
+    assert "SARASHINA_VOLUME_NAME = \"ehime-kokubunsai-model-cache\"" in source
+    assert "LLMJP_VOLUME_NAME = \"ehime-kokubunsai-llmjp-4-8b-cache\"" in source
+    assert 'volumes={"/models": sarashina_volume}' in source
+    assert 'volumes={"/models": llmjp_volume}' in source
     assert "download_llmjp" in source
-    assert "download_sarashina" in source
+    assert "download_sarashina" not in source
 
 
 def test_backend_never_references_sealed_holdout():
