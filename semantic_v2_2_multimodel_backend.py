@@ -71,7 +71,7 @@ download_image = (
 )
 
 
-@app.function(image=download_image, volumes={"/models": llmjp_volume}, timeout=3600)
+@app.function(image=download_image, volumes={"/models": llmjp_volume}, timeout=7200)
 def download_llmjp() -> None:
     from huggingface_hub import snapshot_download
 
