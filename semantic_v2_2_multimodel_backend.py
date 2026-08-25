@@ -67,6 +67,7 @@ base_image = (
 download_image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install("huggingface_hub[hf_xet]")
+    .env({"HF_XET_HIGH_PERFORMANCE": "1"})
     .add_local_python_source("semantic_model_registry")
 )
 
@@ -76,7 +77,11 @@ def download_llmjp() -> None:
     from huggingface_hub import snapshot_download
 
     spec = MODEL_BY_KEY[LLMJP_MODEL_KEY]
-    snapshot_download(repo_id=spec.model_id, local_dir=LLMJP_MODEL_DIR)
+    snapshot_download(
+        repo_id=spec.model_id,
+        local_dir=LLMJP_MODEL_DIR,
+        allow_patterns=("*.json", "*.jinja", "*.py", "*.safetensors"),
+    )
     llmjp_volume.commit()
     print(f"cached {spec.model_id}")
 
