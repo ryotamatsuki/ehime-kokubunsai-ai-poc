@@ -1,0 +1,64 @@
+{
+  "architecture": "semantic-operations-v2.2-atomic-fail-soft",
+  "status": "ready_before_live_run",
+  "frozen_v1_dataset": {
+    "version": "unexpected-user-utterances-v1",
+    "cases": 100,
+    "purpose": "exposed development/regression evaluation only"
+  },
+  "model": {
+    "id": "sbintuitions/sarashina2.2-3b-instruct-v0.1",
+    "gpu": "T4",
+    "quantization": "4bit-nf4-double-quant-fp16-compute",
+    "do_sample": false,
+    "repetition_penalty": 1.02,
+    "max_new_tokens": 220,
+    "format_enforcer": "lmfe",
+    "lm_format_enforcer": ">=0.10,<1"
+  },
+  "v2_2_contract": {
+    "model_calls_per_residual_turn_max": 1,
+    "repair_generation": false,
+    "few_shot_examples": 5,
+    "few_shot_source": "spec-authored, not frozen-v1 fixtures and not sealed holdout",
+    "model_state_fields": [
+      "has_previous_results",
+      "has_previous_command"
+    ],
+    "exact_result_ids_sent_to_model": false,
+    "selected_event_id_sent_to_model": false,
+    "semantic_verifier": "pure-python-post-frame",
+    "fail_soft": true,
+    "uncertainty_observability": "lmfe constrained-token probability/margin/entropy",
+    "uncertainty_behavioral_threshold_enabled": false
+  },
+  "oracle_gate": {
+    "v2_1": "100/100",
+    "v2_2": "100/100"
+  },
+  "critical_git_blobs": {
+    "semantic_atomic_v2_2.py": "9d1851b05e2434efe5fffaa543f21a51abe1e8d1",
+    "semantic_prompt_v2_2.py": "090d5b543c28b69e2f9bfe140ab94f7d2b374b4b",
+    "semantic_verifier_v2_2.py": "9fe6672904d8e37d29ba17088bf2cd5393316bde",
+    "semantic_state_v2_2.py": "16ed2c78606af00a63c1bca6def70f705369c125",
+    "semantic_orchestrator_v2_2.py": "f1889973079f17457520549390160bf9980cc05e",
+    "semantic_oracle_ceiling_v2_2.py": "a5d4c46fa085d2ad3af7748e5f11b68dd55db2af",
+    "unexpected_utterances_v2_2_eval.py": "6045b553d30f45ce03a652adefce1b6e3601089f",
+    "semantic_v2_2_live_eval.py": "921ef21d84a4978eb5f2d4d3b8b6c6ad6b870760",
+    "tests/test_semantic_v2_2.py": "ba3992777a705c167051b22456da4352d509fd06",
+    "tests/test_semantic_v2_2_prompt_verifier.py": "de2269b1d74cc07126617cd9c0920dcb91542e0b"
+  },
+  "sealed_holdout": {
+    "version": "unexpected-user-utterances-holdout-v2.1",
+    "cases": 200,
+    "payload_sha256": "c844dda17248c0e7f16cd2985652e62bb0f8b601bf21196d6801479580899c92",
+    "opened": false,
+    "runner_present": false,
+    "policy": "do not open, decompress, inspect, tune on, or execute before post-live architecture decision"
+  },
+  "production": {
+    "main_modified": false,
+    "production_deployed": false,
+    "pr_44_merged": false
+  }
+}
