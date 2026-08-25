@@ -1,0 +1,47 @@
+name: Verify active LLM-jp cache health
+
+on:
+  push:
+    branches:
+      - feature/model-selector-llmjp-v22
+    paths:
+      - .github/workflows/model-selector-cache-health.yml
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    environment: ehime-kokubunsai-ai-poc
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --upgrade modal
+      - name: Inspect newest ephemeral Semantic v2.2 app
+        env:
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+        run: |
+          set -euo pipefail
+          modal app list --json > apps.json
+          APP_ID=$(python - <<'PY'
+          import json
+          from pathlib import Path
+          apps = json.loads(Path('apps.json').read_text())
+          candidates = [
+              app for app in apps
+              if app.get('Description') == 'ehime-kokubunsai-semantic-v2-2-api'
+              and str(app.get('State', '')).lower() == 'ephemeral'
+          ]
+          candidates.sort(key=lambda app: app.get('Created at') or '', reverse=True)
+          if not candidates:
+              raise SystemExit('no ephemeral semantic v2.2 app found')
+          print(candidates[0]['App ID'])
+          PY
+          )
+          echo "newest ephemeral app: ${APP_ID}"
+          modal app logs "${APP_ID}" --since 10m --tail 250 --timestamps || true
+          echo '--- committed volume root ---'
+          modal volume ls --json ehime-kokubunsai-llmjp-4-8b-cache / || true
