@@ -1,0 +1,31 @@
+name: Inspect active LLM-jp cache task
+
+on:
+  push:
+    branches:
+      - feature/model-selector-llmjp-v22
+    paths:
+      - .github/workflows/model-selector-cache-progress.yml
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    environment: ehime-kokubunsai-ai-poc
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --upgrade modal
+      - name: Read active cache task logs and committed volume markers
+        env:
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+        run: |
+          set -euo pipefail
+          echo '--- Xet retry app ---'
+          modal app logs ap-rl0CARwuXiO34Zqm01kYTU --since 20m --tail 300 --timestamps || true
+          echo '--- committed LLM-jp volume ---'
+          modal volume ls --json ehime-kokubunsai-llmjp-4-8b-cache / || true
