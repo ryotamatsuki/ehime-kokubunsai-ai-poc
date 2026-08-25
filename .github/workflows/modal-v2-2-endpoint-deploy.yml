@@ -1,5 +1,7 @@
 name: Publish selectable Semantic v2.2 endpoints
 
+# Endpoint publication is intentionally separate from the large LLM-jp cache
+# download so routing changes can be verified independently.
 on:
   push:
     branches:
