@@ -22,7 +22,53 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: python -m pip install --upgrade modal requests jsonschema
+      - run: python -m pip install --upgrade modal requests jsonschema 'fastapi[standard]' pytest 'lm-format-enforcer>=0.10,<1'
+
+      - name: Wait for committed LLM-jp cache
+        env:
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 120); do
+            modal volume ls --json ehime-kokubunsai-llmjp-4-8b-cache /llm-jp-4-8b-instruct > volume.json 2>/dev/null || echo '[]' > volume.json
+            if python - <<'PY'
+          import json
+          from pathlib import Path
+          payload = json.loads(Path('volume.json').read_text())
+          text = json.dumps(payload, ensure_ascii=False)
+          required = [
+              'config.json',
+              'model.safetensors.index.json',
+              'model-00001-of-00004.safetensors',
+              'model-00002-of-00004.safetensors',
+              'model-00003-of-00004.safetensors',
+              'model-00004-of-00004.safetensors',
+              'tokenizer_config.json',
+          ]
+          missing = [name for name in required if name not in text]
+          if missing:
+              print('cache markers missing:', missing)
+              raise SystemExit(1)
+          print('LLM-jp committed cache markers: PASS')
+          PY
+            then
+              break
+            fi
+            if [ "$attempt" -eq 120 ]; then
+              echo 'LLM-jp cache did not become ready within 60 minutes' >&2
+              exit 1
+            fi
+            echo "cache not committed yet: ${attempt}/120"
+            sleep 30
+          done
+
+      - name: Deploy latest selectable v2.2 endpoints
+        env:
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+        run: modal deploy semantic_v2_2_multimodel_backend.py
+
       - name: Exercise both authenticated endpoints
         env:
           MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
@@ -32,6 +78,7 @@ jobs:
           import json
           import os
           import time
+          from urllib.parse import urlparse
           import modal
           import requests
           from jsonschema import validate
@@ -41,14 +88,26 @@ jobs:
           if not os.environ.get('MODAL_TOKEN_ID') or not os.environ.get('MODAL_TOKEN_SECRET'):
               raise RuntimeError('Modal API credentials are not configured')
 
+          def assert_safe_redirect_chain(initial_url, response):
+              initial = urlparse(initial_url)
+              for hop in (*response.history, response):
+                  current = urlparse(hop.url)
+                  if (
+                      current.scheme != 'https'
+                      or current.hostname != initial.hostname
+                      or current.path not in {'', '/'}
+                      or current.username
+                      or current.password
+                      or current.fragment
+                  ):
+                      raise RuntimeError(f'unsafe Modal redirect: {hop.url}')
+
           workspace = modal.Workspace.from_context()
           token = workspace.proxy_tokens.create()
           try:
               try:
                   workspace.proxy_tokens.allow(token.token_id, 'main')
               except Exception as exc:
-                  # Non-RBAC workspaces use workspace-wide proxy tokens and do
-                  # not require an explicit environment association.
                   print(f'proxy-token allow(main) not required: {type(exc).__name__}')
 
               headers = {
@@ -69,27 +128,30 @@ jobs:
                       raise RuntimeError(f'{spec.key}: invalid endpoint URL')
                   body = None
                   last_error = None
-                  for attempt in range(1, 19):
+                  for attempt in range(1, 13):
                       try:
-                          response = requests.post(
-                              url,
-                              headers=headers,
-                              json=payload,
-                              timeout=240,
-                              allow_redirects=False,
-                          )
+                          with requests.Session() as session:
+                              session.max_redirects = 8
+                              response = session.post(
+                                  url,
+                                  headers=headers,
+                                  json=payload,
+                                  timeout=300,
+                                  allow_redirects=True,
+                              )
+                          assert_safe_redirect_chain(url, response)
                       except requests.RequestException as exc:
                           last_error = f'{type(exc).__name__}: {exc}'
-                          print(f'{spec.key} attempt {attempt}/18 transport not ready: {last_error[:500]}')
-                          if attempt < 18:
+                          print(f'{spec.key} attempt {attempt}/12 transport not ready: {last_error[:500]}')
+                          if attempt < 12:
                               time.sleep(20)
                               continue
                           raise
 
                       if response.status_code >= 500:
                           last_error = f'HTTP {response.status_code}: {response.text[:300]}'
-                          print(f'{spec.key} attempt {attempt}/18 backend not ready: {last_error}')
-                          if attempt < 18:
+                          print(f'{spec.key} attempt {attempt}/12 backend not ready: {last_error}')
+                          if attempt < 12:
                               time.sleep(20)
                               continue
                       if response.status_code != 200:
@@ -114,8 +176,11 @@ jobs:
                   print(json.dumps({
                       'model_key': spec.key,
                       'status': 'PASS',
+                      'redirects': len(response.history),
                       'prompt_tokens': obs.get('prompt_tokens'),
                       'generated_tokens': obs.get('generated_tokens'),
+                      'container_setup_ms': obs.get('container_setup_ms'),
+                      'model_load_ms': obs.get('model_load_ms'),
                       'server_total_ms': obs.get('server_total_ms'),
                   }, ensure_ascii=False))
           finally:
