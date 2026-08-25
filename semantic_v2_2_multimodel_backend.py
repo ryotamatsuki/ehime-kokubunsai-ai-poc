@@ -13,11 +13,8 @@ import uuid
 from typing import Any, Mapping
 
 import modal
-from fastapi import Request
 
-from semantic_atomic_v2_2 import ATOMIC_FRAME_JSON_SCHEMA
 from semantic_model_registry import MODEL_BY_KEY
-from semantic_prompt_v2_2 import build_atomic_frame_messages
 
 
 SERVICE_ID = "ehime-kokubunsai-semantic-v2-2-api"
@@ -91,6 +88,7 @@ def _load_runtime(model_dir: str) -> dict[str, Any]:
     from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
     from lmformatenforcer import JsonSchemaParser
     from lmformatenforcer.integrations.transformers import build_transformers_prefix_allowed_tokens_fn
+    from semantic_atomic_v2_2 import ATOMIC_FRAME_JSON_SCHEMA
 
     started = time.perf_counter()
     tokenizer_started = time.perf_counter()
@@ -138,6 +136,7 @@ def _generate_frame(
     format_enforcer: str = "lmfe",
 ) -> dict[str, Any]:
     import torch
+    from semantic_prompt_v2_2 import build_atomic_frame_messages
 
     spec = MODEL_BY_KEY[model_key]
     started = time.perf_counter()
@@ -274,7 +273,7 @@ class SarashinaSemanticV22(_SemanticEndpointMixin):
         return self._run(query, state, grounded, format_enforcer)
 
     @modal.fastapi_endpoint(method="POST", requires_proxy_auth=True)
-    async def semantic(self, request: Request):
+    async def semantic(self, request: Any):
         body = await request.json()
         return self._run(
             str(body.get("query", "")),
@@ -305,7 +304,7 @@ class LlmJpSemanticV22(_SemanticEndpointMixin):
         return self._run(query, state, grounded, format_enforcer)
 
     @modal.fastapi_endpoint(method="POST", requires_proxy_auth=True)
-    async def semantic(self, request: Request):
+    async def semantic(self, request: Any):
         body = await request.json()
         return self._run(
             str(body.get("query", "")),
