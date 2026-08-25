@@ -1,5 +1,7 @@
 name: Apply model selector patch
 
+# Temporary branch-only workflow: patches the large Streamlit entrypoint,
+# verifies it, then commits only streamlit_app.py.
 on:
   push:
     branches:
