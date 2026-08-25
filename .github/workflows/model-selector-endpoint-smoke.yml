@@ -22,7 +22,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: python -m pip install --upgrade modal jsonschema
+      - run: python -m pip install --upgrade modal requests jsonschema
       - name: Exercise both authenticated endpoints
         env:
           MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
@@ -31,83 +31,94 @@ jobs:
           PYTHONPATH=. python - <<'PY'
           import json
           import os
-          import subprocess
-          import tempfile
           import time
+          import modal
+          import requests
           from jsonschema import validate
           from semantic_atomic_v2_2 import ATOMIC_FRAME_JSON_SCHEMA
           from semantic_model_registry import MODEL_SPECS, resolve_model_url
 
           if not os.environ.get('MODAL_TOKEN_ID') or not os.environ.get('MODAL_TOKEN_SECRET'):
               raise RuntimeError('Modal API credentials are not configured')
-          payload = json.dumps({
-              'query': '松山市で無料のイベントを探したい',
-              'state': {},
-              'grounded': {},
-              'format_enforcer': 'lmfe',
-          }, ensure_ascii=False)
 
-          for spec in MODEL_SPECS:
-              url = resolve_model_url(spec, {})
-              if not url.startswith('https://'):
-                  raise RuntimeError(f'{spec.key}: invalid endpoint URL')
-              body = None
-              last_error = None
-              for attempt in range(1, 19):
-                  with tempfile.NamedTemporaryFile(mode='w+', encoding='utf-8') as response_file:
-                      completed = subprocess.run(
-                          [
-                              'modal', 'curl', url,
-                              '-sS', '-X', 'POST',
-                              '-H', 'Content-Type: application/json',
-                              '-d', payload,
-                              '-o', response_file.name,
-                              '-w', '%{http_code}',
-                          ],
-                          text=True,
-                          capture_output=True,
-                          timeout=300,
-                          check=False,
-                      )
-                      response_file.seek(0)
-                      raw = response_file.read()
-                  status_text = completed.stdout.strip()[-3:] if completed.stdout.strip() else ''
-                  status = int(status_text) if status_text.isdigit() else 0
-                  if completed.returncode == 0 and status == 200:
+          workspace = modal.Workspace.from_context()
+          token = workspace.proxy_tokens.create()
+          try:
+              try:
+                  workspace.proxy_tokens.allow(token.token_id, 'main')
+              except Exception as exc:
+                  # Non-RBAC workspaces use workspace-wide proxy tokens and do
+                  # not require an explicit environment association.
+                  print(f'proxy-token allow(main) not required: {type(exc).__name__}')
+
+              headers = {
+                  'Modal-Key': token.token_id,
+                  'Modal-Secret': token.token_secret,
+                  'Content-Type': 'application/json',
+              }
+              payload = {
+                  'query': '松山市で無料のイベントを探したい',
+                  'state': {},
+                  'grounded': {},
+                  'format_enforcer': 'lmfe',
+              }
+
+              for spec in MODEL_SPECS:
+                  url = resolve_model_url(spec, {})
+                  if not url.startswith('https://'):
+                      raise RuntimeError(f'{spec.key}: invalid endpoint URL')
+                  body = None
+                  last_error = None
+                  for attempt in range(1, 19):
                       try:
-                          body = json.loads(raw)
-                      except json.JSONDecodeError as exc:
-                          raise RuntimeError(f'{spec.key}: invalid JSON response: {raw[:300]}') from exc
-                      break
-                  last_error = (
-                      f'returncode={completed.returncode} status={status} '
-                      f'stderr={completed.stderr[-500:]} body={raw[:300]}'
-                  )
-                  print(f'{spec.key} attempt {attempt}/18 not ready: {last_error}')
-                  if status in {400, 401, 403, 404}:
-                      raise RuntimeError(f'{spec.key}: non-retryable endpoint failure: {last_error}')
-                  if attempt < 18:
-                      time.sleep(20)
+                          response = requests.post(
+                              url,
+                              headers=headers,
+                              json=payload,
+                              timeout=240,
+                              allow_redirects=False,
+                          )
+                      except requests.RequestException as exc:
+                          last_error = f'{type(exc).__name__}: {exc}'
+                          print(f'{spec.key} attempt {attempt}/18 transport not ready: {last_error[:500]}')
+                          if attempt < 18:
+                              time.sleep(20)
+                              continue
+                          raise
 
-              if body is None:
-                  raise RuntimeError(f'{spec.key} endpoint smoke failed: {last_error}')
-              if body.get('service_id') != 'ehime-kokubunsai-semantic-v2-2-api':
-                  raise RuntimeError(f'{spec.key}: unexpected service_id: {body.get("service_id")}')
-              if body.get('model_key') != spec.key:
-                  raise RuntimeError(f'{spec.key}: unexpected model_key: {body.get("model_key")}')
-              if body.get('model_id') != spec.model_id:
-                  raise RuntimeError(f'{spec.key}: unexpected model_id: {body.get("model_id")}')
-              answer = body.get('answer')
-              if not isinstance(answer, str) or not answer.strip():
-                  raise RuntimeError(f'{spec.key}: empty answer: {body.get("error")}')
-              frame = json.loads(answer)
-              validate(frame, ATOMIC_FRAME_JSON_SCHEMA)
-              obs = body.get('observability') or {}
-              print(json.dumps({
-                  'model_key': spec.key,
-                  'status': 'PASS',
-                  'prompt_tokens': obs.get('prompt_tokens'),
-                  'generated_tokens': obs.get('generated_tokens'),
-                  'server_total_ms': obs.get('server_total_ms'),
-              }, ensure_ascii=False))
+                      if response.status_code >= 500:
+                          last_error = f'HTTP {response.status_code}: {response.text[:300]}'
+                          print(f'{spec.key} attempt {attempt}/18 backend not ready: {last_error}')
+                          if attempt < 18:
+                              time.sleep(20)
+                              continue
+                      if response.status_code != 200:
+                          raise RuntimeError(f'{spec.key}: HTTP {response.status_code}: {response.text[:300]}')
+                      body = response.json()
+                      break
+
+                  if body is None:
+                      raise RuntimeError(f'{spec.key} endpoint smoke failed: {last_error}')
+                  if body.get('service_id') != 'ehime-kokubunsai-semantic-v2-2-api':
+                      raise RuntimeError(f'{spec.key}: unexpected service_id: {body.get("service_id")}')
+                  if body.get('model_key') != spec.key:
+                      raise RuntimeError(f'{spec.key}: unexpected model_key: {body.get("model_key")}')
+                  if body.get('model_id') != spec.model_id:
+                      raise RuntimeError(f'{spec.key}: unexpected model_id: {body.get("model_id")}')
+                  answer = body.get('answer')
+                  if not isinstance(answer, str) or not answer.strip():
+                      raise RuntimeError(f'{spec.key}: empty answer: {body.get("error")}')
+                  frame = json.loads(answer)
+                  validate(frame, ATOMIC_FRAME_JSON_SCHEMA)
+                  obs = body.get('observability') or {}
+                  print(json.dumps({
+                      'model_key': spec.key,
+                      'status': 'PASS',
+                      'prompt_tokens': obs.get('prompt_tokens'),
+                      'generated_tokens': obs.get('generated_tokens'),
+                      'server_total_ms': obs.get('server_total_ms'),
+                  }, ensure_ascii=False))
+          finally:
+              workspace.proxy_tokens.delete(token.token_id)
+              print('ephemeral proxy token deleted')
           PY
