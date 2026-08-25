@@ -35,7 +35,7 @@ jobs:
           import requests
           from jsonschema import validate
           from semantic_atomic_v2_2 import ATOMIC_FRAME_JSON_SCHEMA
-          from semantic_model_registry import MODEL_SPECS
+          from semantic_model_registry import MODEL_SPECS, resolve_model_url
 
           headers = {
               'Modal-Key': os.environ['MODAL_TOKEN_ID'],
@@ -50,46 +50,58 @@ jobs:
           }
 
           for spec in MODEL_SPECS:
-              last_error = None
-              for attempt in range(1, 13):
+              url = resolve_model_url(spec, {})
+              if not url.startswith('https://'):
+                  raise RuntimeError(f'{spec.key}: invalid endpoint URL')
+              last_transport_error = None
+              body = None
+              for attempt in range(1, 19):
                   try:
                       response = requests.post(
-                          spec.deployed_url,
+                          url,
                           headers=headers,
                           json=payload,
                           timeout=240,
                           allow_redirects=False,
                       )
-                      if response.status_code != 200:
-                          raise RuntimeError(f'HTTP {response.status_code}: {response.text[:300]}')
-                      body = response.json()
-                      if body.get('service_id') != 'ehime-kokubunsai-semantic-v2-2-api':
-                          raise RuntimeError(f'unexpected service_id: {body.get("service_id")}')
-                      if body.get('model_key') != spec.key:
-                          raise RuntimeError(f'unexpected model_key: {body.get("model_key")}')
-                      if body.get('model_id') != spec.model_id:
-                          raise RuntimeError(f'unexpected model_id: {body.get("model_id")}')
-                      answer = body.get('answer')
-                      if not isinstance(answer, str) or not answer.strip():
-                          raise RuntimeError(f'empty answer: {body.get("error")}')
-                      frame = json.loads(answer)
-                      validate(frame, ATOMIC_FRAME_JSON_SCHEMA)
-                      obs = body.get('observability') or {}
-                      print(json.dumps({
-                          'model_key': spec.key,
-                          'status': 'PASS',
-                          'attempt': attempt,
-                          'prompt_tokens': obs.get('prompt_tokens'),
-                          'generated_tokens': obs.get('generated_tokens'),
-                          'server_total_ms': obs.get('server_total_ms'),
-                      }, ensure_ascii=False))
-                      last_error = None
-                      break
-                  except Exception as exc:
-                      last_error = f'{type(exc).__name__}: {exc}'
-                      print(f'{spec.key} attempt {attempt}/12 not ready: {last_error[:500]}')
-                      if attempt < 12:
+                  except requests.RequestException as exc:
+                      last_transport_error = f'{type(exc).__name__}: {exc}'
+                      print(f'{spec.key} attempt {attempt}/18 transport not ready: {last_transport_error[:500]}')
+                      if attempt < 18:
                           time.sleep(20)
-              if last_error is not None:
-                  raise RuntimeError(f'{spec.key} endpoint smoke failed: {last_error}')
+                          continue
+                      raise
+
+                  if response.status_code >= 500:
+                      last_transport_error = f'HTTP {response.status_code}: {response.text[:300]}'
+                      print(f'{spec.key} attempt {attempt}/18 backend not ready: {last_transport_error}')
+                      if attempt < 18:
+                          time.sleep(20)
+                          continue
+                  if response.status_code != 200:
+                      raise RuntimeError(f'{spec.key}: HTTP {response.status_code}: {response.text[:300]}')
+                  body = response.json()
+                  break
+
+              if body is None:
+                  raise RuntimeError(f'{spec.key} endpoint smoke failed: {last_transport_error}')
+              if body.get('service_id') != 'ehime-kokubunsai-semantic-v2-2-api':
+                  raise RuntimeError(f'{spec.key}: unexpected service_id: {body.get("service_id")}')
+              if body.get('model_key') != spec.key:
+                  raise RuntimeError(f'{spec.key}: unexpected model_key: {body.get("model_key")}')
+              if body.get('model_id') != spec.model_id:
+                  raise RuntimeError(f'{spec.key}: unexpected model_id: {body.get("model_id")}')
+              answer = body.get('answer')
+              if not isinstance(answer, str) or not answer.strip():
+                  raise RuntimeError(f'{spec.key}: empty answer: {body.get("error")}')
+              frame = json.loads(answer)
+              validate(frame, ATOMIC_FRAME_JSON_SCHEMA)
+              obs = body.get('observability') or {}
+              print(json.dumps({
+                  'model_key': spec.key,
+                  'status': 'PASS',
+                  'prompt_tokens': obs.get('prompt_tokens'),
+                  'generated_tokens': obs.get('generated_tokens'),
+                  'server_total_ms': obs.get('server_total_ms'),
+              }, ensure_ascii=False))
           PY
