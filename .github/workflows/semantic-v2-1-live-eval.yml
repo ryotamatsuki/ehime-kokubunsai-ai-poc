@@ -34,7 +34,7 @@ jobs:
       - name: Compile and run evaluator QA
         run: |
           python -m compileall -q .
-          pytest -q tests/test_unexpected_utterances_v2_1_eval.py
+          PYTHONPATH=. python -m pytest -q tests/test_unexpected_utterances_v2_1_eval.py
 
       - name: Verify freeze integrity and sealed holdout boundary
         run: |
