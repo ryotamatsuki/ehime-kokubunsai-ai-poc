@@ -17,6 +17,7 @@ from semantic_orchestrator_v2_2 import SemanticOperationsOrchestratorV22, Semant
 
 
 SERVICE_ID = "ehime-kokubunsai-semantic-v2-2-api"
+MAX_MODAL_RESULT_REDIRECTS = 4
 _EXPECTED_HOST_RE = re.compile(
     r"^[a-z0-9-]+--ehime-kokubunsai-semantic-v2-2-api(?:-[a-z0-9-]+)*\.modal\.run$"
 )
@@ -46,19 +47,48 @@ def validate_semantic_modal_url(url: str) -> str:
     return str(url).strip()
 
 
+def _validate_modal_result_url(initial_url: str, result_url: str) -> None:
+    """Allow Modal's long-running result URL only on the original endpoint host.
+
+    Modal Web Functions return HTTP 303 after their synchronous HTTP window and
+    point back to the original URL with a result query parameter.  We follow
+    that mechanism, but never permit the proxy credentials to cross hosts.
+    """
+
+    initial = urlparse(validate_semantic_modal_url(initial_url))
+    current = urlparse(str(result_url).strip())
+    if (
+        current.scheme != "https"
+        or (current.hostname or "").lower() != (initial.hostname or "").lower()
+        or current.username
+        or current.password
+        or current.path not in {"", "/"}
+        or current.fragment
+    ):
+        raise ModalCallError("semantic_v22_redirect_error")
+
+
 def post_atomic_frame(config: SemanticEndpointConfig, payload: Mapping[str, Any]) -> Mapping[str, Any]:
     try:
-        response = requests.post(
-            validate_semantic_modal_url(config.url),
-            headers={
-                "Modal-Key": config.key,
-                "Modal-Secret": config.secret,
-                "Content-Type": "application/json",
-            },
-            json={**dict(payload), "format_enforcer": "lmfe"},
-            timeout=300,
-            allow_redirects=False,
-        )
+        endpoint_url = validate_semantic_modal_url(config.url)
+        with requests.Session() as session:
+            # Bound the total number of Modal 303 result hops while still
+            # supporting cold model starts that exceed the 150-second HTTP
+            # response window of a Web Function.
+            session.max_redirects = MAX_MODAL_RESULT_REDIRECTS
+            response = session.post(
+                endpoint_url,
+                headers={
+                    "Modal-Key": config.key,
+                    "Modal-Secret": config.secret,
+                    "Content-Type": "application/json",
+                },
+                json={**dict(payload), "format_enforcer": "lmfe"},
+                timeout=300,
+                allow_redirects=True,
+            )
+        for hop in (*response.history, response):
+            _validate_modal_result_url(endpoint_url, hop.url)
         if response.status_code < 200 or response.status_code >= 300:
             raise ModalCallError(
                 "semantic_v22_http_error",
@@ -89,6 +119,8 @@ def post_atomic_frame(config: SemanticEndpointConfig, payload: Mapping[str, Any]
         return body
     except requests.Timeout as exc:
         raise ModalCallError("semantic_v22_timeout") from exc
+    except requests.TooManyRedirects as exc:
+        raise ModalCallError("semantic_v22_timeout") from exc
     except requests.RequestException as exc:
         raise ModalCallError("semantic_v22_http_error") from exc
 
@@ -109,6 +141,7 @@ def run_semantic_v22(
 
 
 __all__ = [
+    "MAX_MODAL_RESULT_REDIRECTS",
     "SERVICE_ID",
     "SemanticEndpointConfig",
     "post_atomic_frame",
