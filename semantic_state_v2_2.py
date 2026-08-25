@@ -234,6 +234,15 @@ def _neutral_frame(*, intent: str = "search", scope: str = "new") -> AtomicSeman
     )
 
 
+_FAIL_SOFT_TYPED_FIELDS = (
+    "dates", "municipalities", "regions", "genres",
+    "experience_required", "experience_preferred", "experience_excluded",
+    "audience", "age", "age_group", "age_intent", "venue",
+    "entry_free", "paid_only", "max_entry_fee", "reservation_required",
+    "rain_preferred", "time_slots", "time_after",
+)
+
+
 def fail_soft_reduce(
     query: str,
     state: Mapping[str, Any] | None = None,
@@ -242,24 +251,44 @@ def fail_soft_reduce(
     previous_scope: bool = False,
     reason: str = "atomic_frame_invalid",
 ) -> AtomicReduction:
-    """Preserve trusted deterministic work without pretending unknown meaning.
+    """Preserve only trusted typed grounding after a classifier failure.
 
-    If deterministic parsing fully explains the turn, execute that grounded
-    search. If unexplained residual language remains, ask for clarification
-    instead of discarding the grounded slots or inventing semantics.
+    Free-text topics are deliberately not enough for automatic execution: a
+    phrase such as "quiet" can look like a keyword while actually expressing
+    an evidence-bound suitability condition. Fully typed deterministic filters
+    may still execute. Otherwise v2.2 asks for clarification instead of
+    discarding known slots or inventing the missing meaning.
     """
 
     normalized = normalize_query_for_grounding(query)
     grounded = grounded_slots_from_query(normalized, reference_date)
-    residual = event_search.unknown_query_residuals(normalized)
+    analysis = event_search.analyze_query_terms(normalized)
+    has_typed_grounding = _has_any(grounded, *_FAIL_SOFT_TYPED_FIELDS)
+    uncovered_topic = bool(analysis.known_topics and not grounded.get("genres"))
     has_context = bool(isinstance(state, Mapping) and (state.get("last_result_ids") or state.get("last_command")))
     scope = "previous" if previous_scope and has_context else "new"
 
-    if residual:
+    if analysis.unknown_residual or uncovered_topic:
         return AtomicReduction(
             status="clarification",
             frame=None,
             message="一部の条件を確実に解釈できませんでした。条件を少し言い換えて教えてみて。",
+            grounded_slots=grounded,
+            applied_atoms={},
+            normalized_query=normalized,
+            fail_soft=True,
+            fail_soft_reason=reason,
+        )
+
+    # A generic recommendation with no semantic residue is a valid broad
+    # search. Otherwise require either typed grounding or a trusted previous
+    # scope before executing after model failure.
+    generic_broad = not analysis.known_topics and not analysis.unknown_residual
+    if not (has_typed_grounding or generic_broad or scope == "previous"):
+        return AtomicReduction(
+            status="clarification",
+            frame=None,
+            message="条件を確実に解釈できませんでした。もう少し具体的に教えてみて。",
             grounded_slots=grounded,
             applied_atoms={},
             normalized_query=normalized,
