@@ -19,13 +19,13 @@ jobs:
         with:
           python-version: "3.11"
       - run: python -m pip install --upgrade modal
-      - name: Print active Modal inventory and committed volume root
+      - name: Inspect active fixed cache task and partial file inventory
         env:
           MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
         run: |
           set -euo pipefail
-          echo '--- Modal apps ---'
-          modal app list --json
-          echo '--- committed LLM-jp volume root ---'
-          modal volume ls --json ehime-kokubunsai-llmjp-4-8b-cache / || true
+          echo '--- fixed cache task logs ---'
+          modal app logs ap-cDcoLzJAWvRbmTEDQPkFEH --since 10m --tail 300 --timestamps || true
+          echo '--- LLM-jp model directory ---'
+          modal volume ls --json ehime-kokubunsai-llmjp-4-8b-cache /llm-jp-4-8b-instruct || true
