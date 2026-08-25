@@ -1,9 +1,9 @@
 """Modal backends for selectable Semantic Operations v2.2 models.
 
-Each model has its own GPU class and authenticated endpoint.  The Streamlit UI
+Each model has its own GPU class and authenticated endpoint. The Streamlit UI
 selects the endpoint, while the Atomic schema/prompt/verifier/reducer remain
-identical.  This avoids loading two models into one T4 container and preserves
-a clean model-only A/B boundary.
+identical. Sarashina reuses the already-proven v2.2 evaluation cache; LLM-jp
+uses an independent volume so adding the 8B model cannot disturb that cache.
 """
 
 from __future__ import annotations
@@ -22,7 +22,8 @@ from semantic_prompt_v2_2 import build_atomic_frame_messages
 
 SERVICE_ID = "ehime-kokubunsai-semantic-v2-2-api"
 PROTOCOL_VERSION = "semantic-v2.2-atomic-fewshot-verifier-lmfe-ui-v1"
-MODEL_VOLUME_NAME = "ehime-kokubunsai-model-cache"
+SARASHINA_VOLUME_NAME = "ehime-kokubunsai-model-cache"
+LLMJP_VOLUME_NAME = "ehime-kokubunsai-llmjp-4-8b-cache"
 SARASHINA_MODEL_KEY = "sarashina-2.2-3b"
 LLMJP_MODEL_KEY = "llm-jp-4-8b"
 SARASHINA_MODEL_DIR = "/models/sarashina"
@@ -45,7 +46,8 @@ LOCAL_SOURCE_MODULES = (
 )
 
 app = modal.App(SERVICE_ID)
-model_volume = modal.Volume.from_name(MODEL_VOLUME_NAME, create_if_missing=True)
+sarashina_volume = modal.Volume.from_name(SARASHINA_VOLUME_NAME, create_if_missing=False)
+llmjp_volume = modal.Volume.from_name(LLMJP_VOLUME_NAME, create_if_missing=True)
 
 base_image = (
     modal.Image.debian_slim(python_version="3.11")
@@ -65,27 +67,17 @@ base_image = (
 download_image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install("huggingface_hub")
+    .add_local_python_source("semantic_model_registry")
 )
 
 
-def _download(repo_id: str, local_dir: str) -> None:
+@app.function(image=download_image, volumes={"/models": llmjp_volume}, timeout=3600)
+def download_llmjp() -> None:
     from huggingface_hub import snapshot_download
 
-    snapshot_download(repo_id=repo_id, local_dir=local_dir)
-    model_volume.commit()
-
-
-@app.function(image=download_image, volumes={"/models": model_volume}, timeout=1800)
-def download_sarashina() -> None:
-    spec = MODEL_BY_KEY[SARASHINA_MODEL_KEY]
-    _download(spec.model_id, SARASHINA_MODEL_DIR)
-    print(f"cached {spec.model_id}")
-
-
-@app.function(image=download_image, volumes={"/models": model_volume}, timeout=3600)
-def download_llmjp() -> None:
     spec = MODEL_BY_KEY[LLMJP_MODEL_KEY]
-    _download(spec.model_id, LLMJP_MODEL_DIR)
+    snapshot_download(repo_id=spec.model_id, local_dir=LLMJP_MODEL_DIR)
+    llmjp_volume.commit()
     print(f"cached {spec.model_id}")
 
 
@@ -259,7 +251,7 @@ class _SemanticEndpointMixin:
 @app.cls(
     image=base_image,
     gpu="T4",
-    volumes={"/models": model_volume},
+    volumes={"/models": sarashina_volume},
     max_containers=1,
     scaledown_window=60,
     timeout=600,
@@ -290,7 +282,7 @@ class SarashinaSemanticV22(_SemanticEndpointMixin):
 @app.cls(
     image=base_image,
     gpu="T4",
-    volumes={"/models": model_volume},
+    volumes={"/models": llmjp_volume},
     max_containers=1,
     scaledown_window=60,
     timeout=600,
@@ -321,11 +313,12 @@ class LlmJpSemanticV22(_SemanticEndpointMixin):
 __all__ = [
     "FRAME_MAX_NEW_TOKENS",
     "LLMJP_MODEL_KEY",
+    "LLMJP_VOLUME_NAME",
     "LlmJpSemanticV22",
     "PROTOCOL_VERSION",
     "SARASHINA_MODEL_KEY",
+    "SARASHINA_VOLUME_NAME",
     "SERVICE_ID",
     "SarashinaSemanticV22",
     "download_llmjp",
-    "download_sarashina",
 ]
