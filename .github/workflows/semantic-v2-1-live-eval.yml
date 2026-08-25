@@ -2,6 +2,9 @@ name: Semantic v2.1 Live Evaluation
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - feature/semantic-operations-v2-1-pre-eval
 
 permissions:
   contents: read
