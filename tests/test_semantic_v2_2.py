@@ -52,6 +52,16 @@ def _state_with_free_and_experience():
     }
 
 
+def _search_state(count: int = 5):
+    ids = [f"{index:03d}" for index in range(1, count + 1)]
+    return {
+        "last_result_ids": ids,
+        "last_result_count": count,
+        "has_last_search_context": True,
+        "last_action": "find_events",
+    }
+
+
 def test_atomic_frame_has_exact_fixed_contract():
     frame = AtomicSemanticFrame.from_dict(_frame())
     assert set(frame.to_dict()) == {
@@ -78,6 +88,14 @@ def test_grounded_filters_win_over_wrong_model_atoms():
     assert reduction.plan.slots.paid_only is None
     assert "municipality:grounded_wins" in reduction.ignored_atoms
     assert "fee:grounded_wins" in reduction.ignored_atoms
+
+
+def test_canonical_genre_is_preserved_as_bounded_topic():
+    reduction = reduce_atomic_frame(AtomicSemanticFrame.from_dict(_frame()), "南予で工芸が見たい")
+    assert reduction.ready
+    assert reduction.plan is not None
+    assert reduction.plan.slots.genres == ("工芸",)
+    assert reduction.plan.slots.topics == ("工芸",)
 
 
 def test_kana_municipality_is_grounded_before_model():
@@ -141,6 +159,15 @@ def test_experience_unset_does_not_erase_other_concepts():
     assert "watch_listen" in result.slots["experience_required"]
 
 
+def test_negative_experience_atom_overrides_lexical_positive_grounding():
+    result = SemanticOperationsOrchestratorV22(
+        frame_call=_call(_frame(scope="previous", experience={"hands_on": "exclude"}))
+    ).handle_query("逆に体験型は外して", _state_with_free_and_experience())
+    assert result.flow == "find_events"
+    assert "hands_on" in result.slots["experience_excluded"]
+    assert "hands_on" not in result.slots["experience_required"]
+
+
 def test_fail_soft_preserves_fully_grounded_filters_without_repair():
     calls = 0
 
@@ -195,16 +222,68 @@ def test_ordinal_detail_remains_pre_model():
         calls += 1
         return {"answer": json.dumps(_frame(), ensure_ascii=False)}
 
-    state = {
-        "last_result_ids": ["001", "002", "003"],
-        "last_result_count": 3,
-        "has_last_search_context": True,
-    }
-    result = SemanticOperationsOrchestratorV22(frame_call=invoke).handle_query("2番目はいくら？", state)
+    result = SemanticOperationsOrchestratorV22(frame_call=invoke).handle_query("2番目はいくら？", _search_state(3))
     assert calls == 0
     assert result.flow == "event_detail"
     assert result.slots["reference_kind"] == "ordinal"
     assert result.slots["reference_index"] == 2
+
+
+def test_ordinal_detail_outranks_only_refinement_marker():
+    calls = 0
+
+    def invoke(_payload):
+        nonlocal calls
+        calls += 1
+        return {"answer": json.dumps(_frame(), ensure_ascii=False)}
+
+    result = SemanticOperationsOrchestratorV22(frame_call=invoke).handle_query("3番目の場所だけ教えて", _search_state())
+    assert calls == 0
+    assert result.flow == "event_detail"
+    assert result.slots["reference_kind"] == "ordinal"
+    assert result.slots["reference_index"] == 3
+
+
+def test_result_evidence_with_ordinal_is_pre_model():
+    calls = 0
+
+    def invoke(_payload):
+        nonlocal calls
+        calls += 1
+        return {"answer": json.dumps(_frame(), ensure_ascii=False)}
+
+    result = SemanticOperationsOrchestratorV22(frame_call=invoke).handle_query("4番目は条件のどこに合ってた？", _search_state())
+    assert calls == 0
+    assert result.flow == "explain_result"
+    assert result.slots["reference_kind"] == "ordinal"
+    assert result.slots["reference_index"] == 4
+
+
+def test_search_evidence_relation_is_pre_model():
+    calls = 0
+
+    def invoke(_payload):
+        nonlocal calls
+        calls += 1
+        return {"answer": json.dumps(_frame(), ensure_ascii=False)}
+
+    result = SemanticOperationsOrchestratorV22(frame_call=invoke).handle_query("この候補って何を材料に選んだの？", _search_state())
+    assert calls == 0
+    assert result.flow == "explain_search"
+
+
+def test_sequence_followup_without_unique_selection_keeps_next_flow_and_clarifies():
+    calls = 0
+
+    def invoke(_payload):
+        nonlocal calls
+        calls += 1
+        return {"answer": json.dumps(_frame(), ensure_ascii=False)}
+
+    result = SemanticOperationsOrchestratorV22(frame_call=invoke).handle_query("そのイベントのあと何か行ける？", _search_state())
+    assert calls == 0
+    assert result.flow == "recommend_next"
+    assert result.status == "clarification"
 
 
 def test_security_scope_remains_pre_model():
