@@ -18,11 +18,13 @@ import event_search
 import suitability_clarification
 from command_models import CommandPlan, CommandSlots
 from command_orchestrator import CommandOrchestrator, CommandTurnResult
-from semantic_atomic_v2_2 import AtomicFrameError, AtomicSemanticFrame, build_atomic_frame_payload
+from semantic_atomic_v2_2 import AtomicFrameError, AtomicSemanticFrame
 from semantic_capability_v2_1 import evaluate_capability
 from semantic_demographic_v2_1 import needs_relational_demographic_clarification
 from semantic_orchestrator_v2_1 import SemanticOperationsOrchestratorV21
+from semantic_prompt_v2_2 import build_minimal_atomic_payload
 from semantic_state_v2_2 import AtomicReduction, fail_soft_reduce, grounded_slots_from_query_v22, reduce_atomic_frame
+from semantic_verifier_v2_2 import AtomicVerification, verify_atomic_frame
 
 
 FrameCall = Callable[[Mapping[str, Any]], Any]
@@ -35,6 +37,7 @@ _SEARCH_EVIDENCE_TARGETS = ("選", "候補", "結果")
 _REFERENCE_PRONOUNS = ("そのイベント", "このイベント", "それ", "これ", "さっきの", "今の")
 _SEQUENCE_MARKERS = ("あと", "後", "次", "続けて")
 _CONTINUATION_MARKERS = ("行け", "行き", "何か", "おすすめ", "ある")
+_PLACE_DETAIL_MARKERS = ("場所", "会場", "どこ")
 
 
 @dataclass(frozen=True)
@@ -52,6 +55,7 @@ class SemanticV22Result:
     slots: dict[str, Any] = field(default_factory=dict)
     message: str = ""
     frame: AtomicSemanticFrame | None = None
+    verification: AtomicVerification | None = None
     reduction: AtomicReduction | None = None
     command_result: CommandTurnResult | None = None
     frame_attempts: int = 0
@@ -99,9 +103,27 @@ def _looks_like_sequence_followup(value: str) -> bool:
     )
 
 
-def generate_atomic_frame(query: str, state: Mapping[str, Any] | None, *, call: FrameCall) -> AtomicFrameGeneration:
-    grounded = grounded_slots_from_query_v22(query)
-    payload = build_atomic_frame_payload(query, state, grounded)
+def _atomic_detail_field(query: str) -> str | None:
+    field = event_details.detect_detail_field(query)
+    if field is not None:
+        return field
+    if any(marker in query for marker in _PLACE_DETAIL_MARKERS):
+        return "place"
+    return None
+
+
+def generate_atomic_frame(
+    query: str,
+    state: Mapping[str, Any] | None,
+    *,
+    call: FrameCall,
+    grounded: Mapping[str, Any] | None = None,
+) -> AtomicFrameGeneration:
+    payload = build_minimal_atomic_payload(
+        query,
+        state,
+        grounded if grounded is not None else grounded_slots_from_query_v22(query),
+    )
     try:
         raw = call(payload)
     except Exception as exc:
@@ -148,7 +170,7 @@ class SemanticOperationsOrchestratorV22(SemanticOperationsOrchestratorV21):
 
         # Explicit ordinal + factual detail outranks lexical refinement markers
         # such as "だけ" (e.g. asking only for the place of the third result).
-        detail_field = event_details.detect_detail_field(query)
+        detail_field = _atomic_detail_field(query)
         if reference_index is not None and detail_field is not None:
             slots = CommandSlots.from_dict({
                 "reference_kind": "ordinal",
@@ -176,7 +198,18 @@ class SemanticOperationsOrchestratorV22(SemanticOperationsOrchestratorV21):
 
         return super()._deterministic_context_plan(query, state)
 
-    def _execute_v22_plan(self, query: str, state: Mapping[str, Any] | None, reduction: AtomicReduction, route: str, started: float, *, frame: AtomicSemanticFrame | None, generation: AtomicFrameGeneration | None = None) -> SemanticV22Result:
+    def _execute_v22_plan(
+        self,
+        query: str,
+        state: Mapping[str, Any] | None,
+        reduction: AtomicReduction,
+        route: str,
+        started: float,
+        *,
+        frame: AtomicSemanticFrame | None,
+        generation: AtomicFrameGeneration | None = None,
+        verification: AtomicVerification | None = None,
+    ) -> SemanticV22Result:
         assert reduction.plan is not None
         command = CommandOrchestrator(modal_call=None, reference_date=self.reference_date, events=self.events).handle_query(
             query,
@@ -189,6 +222,7 @@ class SemanticOperationsOrchestratorV22(SemanticOperationsOrchestratorV21):
             slots=command.command.slots.to_dict(),
             message=command.message,
             frame=frame,
+            verification=verification,
             reduction=reduction,
             command_result=command,
             frame_attempts=generation.attempts if generation is not None else 0,
@@ -210,6 +244,7 @@ class SemanticOperationsOrchestratorV22(SemanticOperationsOrchestratorV21):
         *,
         frame: AtomicSemanticFrame | None,
         generation: AtomicFrameGeneration | None,
+        verification: AtomicVerification | None = None,
     ) -> SemanticV22Result:
         attempts = generation.attempts if generation is not None else 0
         error = generation.error if generation is not None else reduction.fail_soft_reason
@@ -217,14 +252,16 @@ class SemanticOperationsOrchestratorV22(SemanticOperationsOrchestratorV21):
         if reduction.status == "clarification":
             return SemanticV22Result(
                 "clarification", "unsupported", message=reduction.message, frame=frame,
-                reduction=reduction, frame_attempts=attempts, frame_fallback=reduction.fail_soft,
-                deterministic_route=route, latency_ms=(time.perf_counter() - started) * 1000,
+                verification=verification, reduction=reduction, frame_attempts=attempts,
+                frame_fallback=reduction.fail_soft, deterministic_route=route,
+                latency_ms=(time.perf_counter() - started) * 1000,
                 frame_error=error, raw_output=raw,
             )
         if reduction.status in {"data_limit", "unsupported"}:
             return SemanticV22Result(
                 "unsupported", "unsupported", message=reduction.message, frame=frame,
-                reduction=reduction, frame_attempts=attempts, frame_fallback=reduction.fail_soft,
+                verification=verification, reduction=reduction, frame_attempts=attempts,
+                frame_fallback=reduction.fail_soft,
                 deterministic_route="data_capability_guard" if reduction.status == "data_limit" else route,
                 latency_ms=(time.perf_counter() - started) * 1000,
                 frame_error=error, raw_output=raw,
@@ -233,13 +270,15 @@ class SemanticOperationsOrchestratorV22(SemanticOperationsOrchestratorV21):
             return SemanticV22Result(
                 "invalid_command", "unsupported",
                 message=reduction.message or "検索条件を確認できませんでした。",
-                frame=frame, reduction=reduction, frame_attempts=attempts,
-                frame_fallback=reduction.fail_soft, handled=False, deterministic_route=route,
+                frame=frame, verification=verification, reduction=reduction,
+                frame_attempts=attempts, frame_fallback=reduction.fail_soft, handled=False,
+                deterministic_route=route,
                 latency_ms=(time.perf_counter() - started) * 1000,
                 frame_error=error, raw_output=raw,
             )
         return self._execute_v22_plan(
             query, state, reduction, route, started, frame=frame, generation=generation,
+            verification=verification,
         )
 
     def handle_query(self, query: str, state: Mapping[str, Any] | None = None) -> SemanticV22Result:
@@ -309,7 +348,8 @@ class SemanticOperationsOrchestratorV22(SemanticOperationsOrchestratorV21):
                 frame=None, generation=None,
             )
 
-        generation = generate_atomic_frame(value, state, call=self.frame_call)
+        grounded = grounded_slots_from_query_v22(value, self.reference_date)
+        generation = generate_atomic_frame(value, state, call=self.frame_call, grounded=grounded)
         if generation.frame is None:
             reduction = fail_soft_reduce(
                 value, state, reference_date=self.reference_date,
@@ -320,8 +360,21 @@ class SemanticOperationsOrchestratorV22(SemanticOperationsOrchestratorV21):
                 frame=None, generation=generation,
             )
 
+        verification = verify_atomic_frame(generation.frame, state=state, grounded=grounded)
+        if not verification.accepted or verification.frame is None:
+            reason = f"semantic_verifier:{verification.reason or 'rejected'}"
+            reduction = fail_soft_reduce(
+                value, state, reference_date=self.reference_date,
+                previous_scope=previous_scope, reason=reason,
+            )
+            return self._from_reduction(
+                value, state, reduction, route_name, started,
+                frame=generation.frame, generation=generation, verification=verification,
+            )
+
+        verified_frame = verification.frame
         reduction = reduce_atomic_frame(
-            generation.frame,
+            verified_frame,
             value,
             state,
             reference_date=self.reference_date,
@@ -329,7 +382,7 @@ class SemanticOperationsOrchestratorV22(SemanticOperationsOrchestratorV21):
         )
         return self._from_reduction(
             value, state, reduction, route_name, started,
-            frame=generation.frame, generation=generation,
+            frame=verified_frame, generation=generation, verification=verification,
         )
 
 
