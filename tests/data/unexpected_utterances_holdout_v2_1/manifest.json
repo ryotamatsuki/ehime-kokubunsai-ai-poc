@@ -1,0 +1,35 @@
+{
+  "schema_version": 2,
+  "version": "unexpected-user-utterances-holdout-v2.1",
+  "sealed_before_v2_1_implementation": true,
+  "base_architecture_commit": "6d6011a92b8cf4fbbed401ab600b19fe440e2437",
+  "reference_date": "2028-11-03",
+  "total_cases": 200,
+  "id_range": [
+    "H21-001",
+    "H21-200"
+  ],
+  "category_targets": {
+    "ambiguous_suitability": 20,
+    "underspecified": 20,
+    "compound_constraints": 20,
+    "context_refinement": 20,
+    "reference_followup": 20,
+    "negation_release": 20,
+    "colloquial_dialect": 20,
+    "participant_semantics": 20,
+    "data_gap_boundary": 20,
+    "security_scope": 20
+  },
+  "manual_review_cases": 81,
+  "payload": "holdout.json.gz",
+  "payload_sha256": "c844dda17248c0e7f16cd2985652e62bb0f8b601bf21196d6801479580899c92",
+  "payload_uncompressed_sha256": "bcc2930a3de9a3e8d5e5094adcb52f2e185bef667bbf7293cac24a6cccb812ab",
+  "holdout_policy": {
+    "do_not_open_before_v2_1_architecture_freeze": true,
+    "do_not_use_for_prompt_tuning": true,
+    "do_not_use_for_rule_authoring": true,
+    "do_not_run_until_v2_1_architecture_frozen": true,
+    "no_expected_behavior_changes_after_seal": true
+  }
+}

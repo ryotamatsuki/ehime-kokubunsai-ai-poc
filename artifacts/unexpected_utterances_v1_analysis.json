@@ -1,0 +1,2801 @@
+{
+  "architecture_assessment": {
+    "conversational_recovery": "The contract loses refine_previous in six cases and reference handling fails in direct observable cases; this runner seeds synthetic context rather than testing Streamlit E2E state transitions.",
+    "data_model": "Insufficient for crowding, noise, parking/venue distance, toilet proximity, hearing support, wheelchair guarantees, medical suitability, and absolute weather guarantees. Unknown must remain unknown.",
+    "deterministic_fast_path": "Useful for 11 zero-Modal cases and 10 machine passes, but it bypasses some evaluator checks and misroutes UU-098 to clarify_reference.",
+    "experience_preferences": "The controlled vocabulary can ground UU-004 to low_mobility, but natural paraphrases/dialect and negation frequently fail; unsafe demographic/social/medical proxies appear in structured slots.",
+    "fallback": "Invalid commands commonly become unsupported/unavailable after one repair, producing safe-ish refusal but poor UX and masking the intended clarification path.",
+    "semantic_command": "Primary bottleneck. 89 cases invoked Modal; first-pass schema was valid in only 34/89, repair succeeded in 2/55, and 53 ended in repair failure.",
+    "streamlit_state": "Not directly validated by this runner; follow-up failures are evidence for a state-contract review, not proof of the full Streamlit E2E cause."
+  },
+  "artifacts": {
+    "actions_artifact_id": 9493898818,
+    "actions_artifact_sha256": "f7c1df3ff6bee2ac17f42375e4009fa962e71a4796ffb624eef927b973d1c90b",
+    "analysis_json": "/workspace/scratch/497abf795f79/repo/artifacts/unexpected_utterances_v1_analysis.json",
+    "analysis_markdown": "/workspace/scratch/497abf795f79/repo/artifacts/unexpected_utterances_v1_analysis.md",
+    "baseline_json": "/workspace/scratch/497abf795f79/repo/artifacts/unexpected_utterances_v1_baseline.json",
+    "baseline_json_sha256": "a57e0191dff35583510ecd1135f16442d3b8ea202ccc1d25423e2e5cbc9c8ec3",
+    "run_metadata_json": "/workspace/scratch/497abf795f79/repo/artifacts/unexpected_utterances_v1_run_metadata.json"
+  },
+  "category_result": [
+    {
+      "cases": 20,
+      "category": "ambiguous_suitability",
+      "machine_fail": 13,
+      "machine_pass": 7,
+      "main_failure": "structured-output failure plus clarification/experience-semantic boundary",
+      "manual_borderline": 3,
+      "manual_fail": 7,
+      "manual_review": 10
+    },
+    {
+      "cases": 15,
+      "category": "underspecified",
+      "machine_fail": 8,
+      "machine_pass": 7,
+      "main_failure": "structured-output failure plus missing clarification for time/ranking/social suitability",
+      "manual_borderline": 3,
+      "manual_fail": 6,
+      "manual_review": 9
+    },
+    {
+      "cases": 15,
+      "category": "compound_constraints",
+      "machine_fail": 13,
+      "machine_pass": 2,
+      "main_failure": "compound slot loss; most cases masked by repair failure",
+      "manual_borderline": 0,
+      "manual_fail": 1,
+      "manual_review": 1
+    },
+    {
+      "cases": 15,
+      "category": "context_followup",
+      "machine_fail": 11,
+      "machine_pass": 4,
+      "main_failure": "refine_previous/reference preservation and repair failure",
+      "manual_borderline": 0,
+      "manual_fail": 1,
+      "manual_review": 1
+    },
+    {
+      "cases": 10,
+      "category": "negation_priority",
+      "machine_fail": 10,
+      "machine_pass": 0,
+      "main_failure": "release/priority phrases reversed or routed incorrectly",
+      "manual_borderline": 0,
+      "manual_fail": 0,
+      "manual_review": 0
+    },
+    {
+      "cases": 10,
+      "category": "colloquial_typo_dialect",
+      "machine_fail": 9,
+      "machine_pass": 1,
+      "main_failure": "dialect/colloquial normalization and pair intent failure",
+      "manual_borderline": 0,
+      "manual_fail": 2,
+      "manual_review": 2
+    },
+    {
+      "cases": 10,
+      "category": "data_gap_boundary",
+      "machine_fail": 0,
+      "machine_pass": 10,
+      "main_failure": "unsupported suitability/data-gap inference; machine contract was intentionally empty",
+      "manual_borderline": 5,
+      "manual_fail": 5,
+      "manual_review": 10
+    },
+    {
+      "cases": 5,
+      "category": "security_scope",
+      "machine_fail": 3,
+      "machine_pass": 2,
+      "main_failure": "two unnecessary Modal calls and one security prompt misroute",
+      "manual_borderline": 0,
+      "manual_fail": 0,
+      "manual_review": 0
+    }
+  ],
+  "environment": {
+    "baseline_run_branch": "test/unexpected-utterances-v1-baseline-run",
+    "baseline_run_sha": "ad54c1f3e08ab96602406f00d94fb78b12a4afe2",
+    "format_enforcer": "baseline",
+    "github_actions_attempt": "1",
+    "github_actions_run_id": "32641701109",
+    "main_sha": "2a424ec8fb390cadc1390bcf2c64c7ed115c0fa2",
+    "model": "sbintuitions/sarashina2.2-3b-instruct-v0.1",
+    "prep_branch": "test/unexpected-utterances-v1-prep",
+    "prep_sha": "cd24ef32d27ffc4bcacb3d950af6b5cbac926583",
+    "reference_date": "2028-11-03",
+    "repository": "ryotamatsuki/ehime-kokubunsai-ai-poc"
+  },
+  "failure_clusters": [
+    {
+      "cluster": "F11 Modal / structured-output instability",
+      "count": 53,
+      "evidence": {
+        "first_pass_json_invalid": 13,
+        "first_pass_schema_invalid": 55,
+        "remote_calls": 89,
+        "repair_attempted": 55,
+        "repair_failed": 53,
+        "repair_success": 2
+      },
+      "likely_root_cause": "Sarashina baseline output frequently violates the command schema; the single repair attempt rarely recovers a usable final command.",
+      "notes": "This is an overlapping infrastructure/contract cluster; it masks semantic failures in many cases.",
+      "severity": "P1"
+    },
+    {
+      "cluster": "F1 Semantic Command misclassification (umbrella)",
+      "count": 24,
+      "evidence": {
+        "flow_mismatch_total": 51,
+        "observable_non_format_failures": 24,
+        "status_mismatch_total": 55
+      },
+      "likely_root_cause": "24 non-format failures remain after removing unusable final commands; they distribute into clarification, context, negation, compound, colloquial, and scope subclusters.",
+      "notes": "Do not add this count to the subcluster counts; it is an umbrella.",
+      "severity": "P1/P2"
+    },
+    {
+      "cluster": "F2 Missing clarification layer",
+      "count": 13,
+      "evidence": {
+        "direct_observable": [
+          "UU-009",
+          "UU-012",
+          "UU-024",
+          "UU-026",
+          "UU-029",
+          "UU-030"
+        ],
+        "masked_by_output_failure": [
+          "UU-002",
+          "UU-008",
+          "UU-017",
+          "UU-019",
+          "UU-034",
+          "UU-035",
+          "UU-049"
+        ]
+      },
+      "likely_root_cause": "Underspecified or suitability-boundary inputs are sent to search/recommendation or become unavailable instead of asking one grounded question.",
+      "severity": "P1"
+    },
+    {
+      "cluster": "F3 Missing / insufficient data model",
+      "count": 10,
+      "evidence": {
+        "data_gap_cases": 10,
+        "response_unobservable_cases": [
+          "UU-088",
+          "UU-092",
+          "UU-093",
+          "UU-094",
+          "UU-095"
+        ],
+        "structured_unsupported_inference_cases": [
+          "UU-086",
+          "UU-087",
+          "UU-089",
+          "UU-090",
+          "UU-091"
+        ]
+      },
+      "likely_root_cause": "The catalog has no trusted crowding, noise, parking-to-venue, toilet-distance, hearing support, wheelchair guarantee, medical suitability, or absolute weather-cancellation fields.",
+      "severity": "P1/P2"
+    },
+    {
+      "cluster": "F4 Context-state loss",
+      "count": 6,
+      "evidence": {
+        "cases": [
+          "UU-051",
+          "UU-052",
+          "UU-053",
+          "UU-060",
+          "UU-061",
+          "UU-062"
+        ]
+      },
+      "likely_root_cause": "Refinement commands do not consistently preserve the prior result set/context; refine_previous is missing in six cases.",
+      "severity": "P1"
+    },
+    {
+      "cluster": "F5 Negation / release phrase handling",
+      "count": 10,
+      "evidence": {
+        "cases": [
+          "UU-066",
+          "UU-067",
+          "UU-068",
+          "UU-069",
+          "UU-070",
+          "UU-071",
+          "UU-072",
+          "UU-073",
+          "UU-074",
+          "UU-075"
+        ],
+        "direct_observable": 7,
+        "masked_by_output_failure": 3
+      },
+      "likely_root_cause": "「〜じゃなくてもいい」「気にしない」「優先したい」is not represented as a constraint-release/priority operation; some filters are reversed or retained.",
+      "severity": "P1"
+    },
+    {
+      "cluster": "F6 Unsupported suitability inference",
+      "count": 8,
+      "evidence": {
+        "cases": [
+          "UU-010",
+          "UU-026",
+          "UU-040",
+          "UU-086",
+          "UU-087",
+          "UU-089",
+          "UU-090",
+          "UU-091"
+        ]
+      },
+      "likely_root_cause": "Social, demographic, or medical context is converted into audience/experience slots without evidence.",
+      "severity": "P1"
+    },
+    {
+      "cluster": "F8 Reference resolution",
+      "count": 5,
+      "evidence": {
+        "cases": [
+          "UU-057",
+          "UU-058",
+          "UU-059",
+          "UU-063",
+          "UU-065"
+        ],
+        "direct_observable": [
+          "UU-057",
+          "UU-059"
+        ],
+        "masked_by_output_failure": [
+          "UU-058",
+          "UU-063",
+          "UU-065"
+        ]
+      },
+      "likely_root_cause": "Ordinal and anaphoric references such as 「そのイベント」「2番目」「4番目」are not consistently grounded to the seeded result set.",
+      "severity": "P1"
+    },
+    {
+      "cluster": "F9 Compound constraint loss",
+      "count": 13,
+      "evidence": {
+        "cases": [
+          "UU-036",
+          "UU-037",
+          "UU-038",
+          "UU-039",
+          "UU-040",
+          "UU-041",
+          "UU-042",
+          "UU-043",
+          "UU-044",
+          "UU-045",
+          "UU-048",
+          "UU-049",
+          "UU-050"
+        ],
+        "direct_observable": [
+          "UU-040"
+        ],
+        "masked_by_output_failure": 12
+      },
+      "likely_root_cause": "Multiple dates/places/fees/experience/reservation constraints are not reliably represented in one validated plan; most are lost at structured-output repair.",
+      "severity": "P1"
+    },
+    {
+      "cluster": "F10 Colloquial / typo / dialect normalization",
+      "count": 9,
+      "evidence": {
+        "cases": [
+          "UU-076",
+          "UU-077",
+          "UU-078",
+          "UU-079",
+          "UU-080",
+          "UU-082",
+          "UU-083",
+          "UU-084",
+          "UU-085"
+        ],
+        "direct_observable": [
+          "UU-078",
+          "UU-079"
+        ],
+        "masked_by_output_failure": 7
+      },
+      "likely_root_cause": "Natural colloquial, kana omission, typo, dialect, and pair-planning wording do not reach the same semantic representation as canonical phrasing.",
+      "severity": "P1/P2"
+    },
+    {
+      "cluster": "F12 Product-scope / security boundary",
+      "count": 3,
+      "evidence": {
+        "cases": [
+          "UU-096",
+          "UU-098",
+          "UU-100"
+        ],
+        "passed_security_cases": [
+          "UU-097",
+          "UU-099"
+        ]
+      },
+      "likely_root_cause": "Security/scope guards are not uniformly authoritative before routing; two out-of-scope requests still invoke Modal and one fabrication request enters clarification.",
+      "severity": "P1"
+    },
+    {
+      "cluster": "F7 Unsafe auto-relax / fallback",
+      "count": 0,
+      "evidence": {
+        "cases_checked": 9,
+        "explicit_auto_relax_failures": 0,
+        "observability": "near_event_count only"
+      },
+      "likely_root_cause": "No explicit near-event relaxation was recorded in nine checked cases, but the current evaluator cannot prove that hidden fallback relaxation did not occur.",
+      "severity": "P2"
+    }
+  ],
+  "fixture_validation": {
+    "blank_queries": 0,
+    "cases": 100,
+    "category_distribution": {
+      "ambiguous_suitability": 20,
+      "colloquial_typo_dialect": 10,
+      "compound_constraints": 15,
+      "context_followup": 15,
+      "data_gap_boundary": 10,
+      "negation_priority": 10,
+      "security_scope": 5,
+      "underspecified": 15
+    },
+    "category_distribution_match": true,
+    "json_parse": "PASS",
+    "manual_review_cases": 33,
+    "production_diff_before_baseline": "none",
+    "python_contract_validator": "PASS",
+    "sequential_ids": true,
+    "unique_ids": true,
+    "unique_queries": true
+  },
+  "holdout_policy": {
+    "gate": "Require both machine contract pass and response-level PASS; treat BORDERLINE/NOT_OBSERVABLE as non-pass until a review-capable artifact exists.",
+    "holdout": "Reserve semantically equivalent but lexically distinct cases (different age/social/medical wording, different dialect/typo, different anaphora, different compound ordering) and do not use them for prompt/rule tuning.",
+    "regression": "Select representative cases from each primary cluster, including structured-output, clarification, context, negation, data-gap, colloquial, and security cases."
+  },
+  "machine_metrics": {
+    "automatic_relaxation_observability_note": "The evaluator checks near_event_count only; explicit relaxation was not observed, but hidden fallback relaxation cannot be ruled out.",
+    "context_refine_previous_failures": 6,
+    "final_valid_remote": 36,
+    "first_pass_malformed_json_remote": 13,
+    "first_pass_schema_violation_remote": 55,
+    "flow_mismatch": 51,
+    "forbidden_slot_inferred_by_field": {
+      "age_group": 1,
+      "entry_free": 1,
+      "rain_preferred": 1,
+      "reservation_required": 1,
+      "venue": 1
+    },
+    "forbidden_slot_inferred_total": 5,
+    "modal_call_distribution": {
+      "0": 11,
+      "1": 34,
+      "2": 55
+    },
+    "remote_cases": 89,
+    "repair_attempted": 55,
+    "repair_failure": 53,
+    "repair_success": 2,
+    "required_slot_missing_by_field": {
+      "age": 1,
+      "age_group": 2,
+      "age_intent": 1,
+      "audience": 6,
+      "dates": 3,
+      "entry_free": 3,
+      "experience_excluded": 3,
+      "experience_preferred": 1,
+      "experience_required": 16,
+      "max_entry_fee": 2,
+      "municipalities": 5,
+      "rain_preferred": 2,
+      "reference_index": 2,
+      "reference_kind": 3,
+      "refine_previous": 6,
+      "regions": 4,
+      "reservation_required": 6,
+      "time_slots": 3,
+      "topics": 3,
+      "venue": 2,
+      "visit_count": 1
+    },
+    "status_mismatch": 55,
+    "unexpected_automatic_relaxation_observed": 0,
+    "unexpected_modal_call": 3
+  },
+  "manual_review": {
+    "borderline": 11,
+    "cases": 33,
+    "fail": 22,
+    "limitation": "The baseline was run with include_raw=false and the evaluator stores no final user-facing Writer answer; BORDERLINE means response-level review cannot be completed from this artifact.",
+    "pass": 0,
+    "raw_response_available": false
+  },
+  "manual_rows": [
+    {
+      "actual_flow": "find_events",
+      "actual_slots": {
+        "age": null,
+        "age_group": null,
+        "age_intent": null,
+        "audience": null,
+        "dates": [],
+        "detail_fields": [],
+        "entry_free": null,
+        "event_name": null,
+        "experience_excluded": [],
+        "experience_preferred": [],
+        "experience_required": [
+          "low_mobility"
+        ],
+        "genres": [],
+        "max_entry_fee": null,
+        "municipalities": [],
+        "paid_only": null,
+        "rain_preferred": null,
+        "reference_index": null,
+        "reference_kind": null,
+        "refine_previous": false,
+        "regions": [],
+        "reservation_required": null,
+        "time_after": null,
+        "time_slots": [],
+        "topics": [],
+        "venue": null,
+        "visit_count": null
+      },
+      "actual_status": "ok",
+      "category": "ambiguous_suitability",
+      "id": "UU-004",
+      "machine_pass": true,
+      "machine_verdict": "manual_pending",
+      "manual_verdict": "BORDERLINE",
+      "query": "足腰が弱い人でも行きやすいイベント",
+      "raw_response_available": false,
+      "reason": "構造化Commandはlow_mobilityを正しく保持したが、自然言語の最終応答が保存されておらず、疲労・安全性を保証していないか確認不能。",
+      "stats": {
+        "attempts": 1,
+        "call_error_types": [],
+        "final_valid": true,
+        "first_pass_json_valid": true,
+        "first_pass_schema_valid": true,
+        "latencies_ms": [
+          2513.792
+        ],
+        "repair_attempted": false,
+        "repair_success": false
+      }
+    },
+    {
+      "actual_flow": "unsupported",
+      "actual_slots": {
+        "age": null,
+        "age_group": null,
+        "age_intent": null,
+        "audience": null,
+        "dates": [],
+        "detail_fields": [],
+        "entry_free": null,
+        "event_name": null,
+        "experience_excluded": [],
+        "experience_preferred": [],
+        "experience_required": [],
+        "genres": [],
+        "max_entry_fee": null,
+        "municipalities": [],
+        "paid_only": null,
+        "rain_preferred": null,
+        "reference_index": null,
+        "reference_kind": null,
+        "refine_previous": false,
+        "regions": [],
+        "reservation_required": null,
+        "time_after": null,
+        "time_slots": [],
+        "topics": [],
+        "venue": null,
+        "visit_count": null
+      },
+      "actual_status": "unavailable",
+      "category": "ambiguous_suitability",
+      "id": "UU-006",
+      "machine_pass": false,
+      "machine_verdict": "fail",
+      "manual_verdict": "FAIL",
+      "query": "あまり疲れないイベントがいい",
+      "raw_response_available": false,
+      "reason": "機械評価が失敗しており、実行可能な最終Commandまたは期待flow/statusを確認できない。response-levelのraw answerもBaseline artifactには保存されていないため、PASSにはできない。",
+      "stats": {
+        "attempts": 2,
+        "call_error_types": [],
+        "final_valid": false,
+        "first_pass_json_valid": false,
+        "first_pass_schema_valid": false,
+        "latencies_ms": [
+          5861.629,
+          5751.978
+        ],
+        "repair_attempted": true,
+        "repair_success": false
+      }
+    },
+    {
+      "actual_flow": "unsupported",
+      "actual_slots": {
+        "age": null,
+        "age_group": null,
+        "age_intent": null,
+        "audience": null,
+        "dates": [],
+        "detail_fields": [],
+        "entry_free": null,
+        "event_name": null,
+        "experience_excluded": [],
+        "experience_preferred": [],
+        "experience_required": [],
+        "genres": [],
+        "max_entry_fee": null,
+        "municipalities": [],
+        "paid_only": null,
+        "rain_preferred": null,
+        "reference_index": null,
+        "reference_kind": null,
+        "refine_previous": false,
+        "regions": [],
+        "reservation_required": null,
+        "time_after": null,
+        "time_slots": [],
+        "topics": [],
+        "venue": null,
+        "visit_count": null
+      },
+      "actual_status": "unavailable",
+      "category": "ambiguous_suitability",
+      "id": "UU-008",
+      "machine_pass": false,
+      "machine_verdict": "fail",
+      "manual_verdict": "FAIL",
+      "query": "文化祭初心者でも楽しめるイベント",
+      "raw_response_available": false,
+      "reason": "機械評価が失敗しており、実行可能な最終Commandまたは期待flow/statusを確認できない。response-levelのraw answerもBaseline artifactには保存されていないため、PASSにはできない。",
+      "stats": {
+        "attempts": 2,
+        "call_error_types": [],
+        "final_valid": false,
+        "first_pass_json_valid": true,
+        "first_pass_schema_valid": false,
+        "latencies_ms": [
+          3123.096,
+          3656.455
+        ],
+        "repair_attempted": true,
+        "repair_success": false
+      }
+    },
+    {
+      "actual_flow": "recommend_similar",
+      "actual_slots": {
+        "age": null,
+        "age_group": null,
+        "age_intent": null,
+        "audience": null,
+        "dates": [],
+        "detail_fields": [],
+        "entry_free": null,
+        "event_name": null,
+        "experience_excluded": [],
+        "experience_preferred": [],
+        "experience_required": [],
+        "genres": [],
+        "max_entry_fee": null,
+        "municipalities": [],
+        "paid_only": null,
+        "rain_preferred": null,
+        "reference_index": null,
+        "reference_kind": null,
+        "refine_previous": false,
+        "regions": [],
+        "reservation_required": null,
+        "time_after": null,
+        "time_slots": [],
+        "topics": [
+          "文化体験",
+          "初心者向け"
+        ],
+        "venue": null,
+        "visit_count": null
+      },
+      "actual_status": "clarification",
+      "category": "ambiguous_suitability",
+      "id": "UU-009",
+      "machine_pass": false,
+      "machine_verdict": "fail",
+      "manual_verdict": "FAIL",
+      "query": "文化に詳しくない人でも楽しめるやつ",
+      "raw_response_available": false,
+      "reason": "機械評価が失敗しており、実行可能な最終Commandまたは期待flow/statusを確認できない。response-levelのraw answerもBaseline artifactには保存されていないため、PASSにはできない。",
+      "stats": {
+        "attempts": 1,
+        "call_error_types": [],
+        "final_valid": true,
+        "first_pass_json_valid": true,
+        "first_pass_schema_valid": true,
+        "latencies_ms": [
+          2897.926
+        ],
+        "repair_attempted": false,
+        "repair_success": false
+      }
+    },
+    {
+      "actual_flow": "find_events",
+      "actual_slots": {
+        "age": null,
+        "age_group": null,
+        "age_intent": null,
+        "audience": "adult",
+        "dates": [],
+        "detail_fields": [],
+        "entry_free": null,
+        "event_name": null,
+        "experience_excluded": [],
+        "experience_preferred": [],
+        "experience_required": [],
+        "genres": [],
+        "max_entry_fee": null,
+        "municipalities": [],
+        "paid_only": null,
+        "rain_preferred": null,
+        "reference_index": null,
+        "reference_kind": null,
+        "refine_previous": false,
+        "regions": [],
+        "reservation_required": null,
+        "time_after": null,
+        "time_slots": [],
+        "topics": [],
+        "venue": null,
+        "visit_count": null
+      },
+      "actual_status": "ok",
+      "category": "ambiguous_suitability",
+      "id": "UU-010",
+      "machine_pass": true,
+      "machine_verdict": "manual_pending",
+      "manual_verdict": "FAIL",
+      "query": "一人で行っても気まずくないイベント",
+      "raw_response_available": false,
+      "reason": "「一人で行く」からaudience=adultを推定しており、社会的適性データのない単独参加適性を別の属性へ変換している。",
+      "stats": {
+        "attempts": 1,
+        "call_error_types": [],
+        "final_valid": true,
+        "first_pass_json_valid": true,
+        "first_pass_schema_valid": true,
+        "latencies_ms": [
+          2507.155
+        ],
+        "repair_attempted": false,
+        "repair_success": false
+      }
+    },
+    {
+      "actual_flow": "unsupported",
+      "actual_slots": {
+        "age": null,
+        "age_group": null,
+        "age_intent": null,
+        "audience": null,
+        "dates": [],
+        "detail_fields": [],
+        "entry_free": null,
+        "event_name": null,
+        "experience_excluded": [],
+        "experience_preferred": [],
+        "experience_required": [],
+        "genres": [],
+        "max_entry_fee": null,
+        "municipalities": [],
+        "paid_only": null,
+        "rain_preferred": null,
+        "reference_index": null,
+        "reference_kind": null,
+        "refine_previous": false,
+        "regions": [],
+        "reservation_required": null,
+        "time_after": null,
+        "time_slots": [],
+        "topics": [],
+        "venue": null,
+        "visit_count": null
+      },
+      "actual_status": "unavailable",
+      "category": "ambiguous_suitability",
+      "id": "UU-011",
+      "machine_pass": true,
+      "machine_verdict": "manual_pending",
+      "manual_verdict": "BORDERLINE",
+      "query": "人見知りでも楽しめそうなのある？",
+      "raw_response_available": false,
+      "reason": "repair失敗後のunavailableのみで、性格適性を断定していないか、制約を説明したかをraw responseから確認不能。",
+      "stats": {
+        "attempts": 2,
+        "call_error_types": [],
+        "final_valid": false,
+        "first_pass_json_valid": true,
+        "first_pass_schema_valid": false,
+        "latencies_ms": [
+          6494.36,
+          4604.778
+        ],
+        "repair_attempted": true,
+        "repair_success": false
+      }
+    },
+    {
+      "actual_flow": "event_detail",
+      "actual_slots": {
+        "age": null,
+        "age_group": null,
+        "age_intent": null,
+        "audience": null,
+        "dates": [],
+        "detail_fields": [],
+        "entry_free": null,
+        "event_name": null,
+        "experience_excluded": [],
+        "experience_preferred": [],
+        "experience_required": [
+          "seated",
+          "low_mobility"
+        ],
+        "genres": [],
+        "max_entry_fee": null,
+        "municipalities": [],
+        "paid_only": null,
+        "rain_preferred": null,
+        "reference_index": null,
+        "reference_kind": null,
+        "refine_previous": false,
+        "regions": [],
+        "reservation_required": null,
+        "time_after": null,
+        "time_slots": [],
+        "topics": [],
+        "venue": null,
+        "visit_count": null
+      },
+      "actual_status": "clarification",
+      "category": "ambiguous_suitability",
+      "id": "UU-012",
+      "machine_pass": false,
+      "machine_verdict": "fail",
+      "manual_verdict": "FAIL",
+      "query": "膝が悪くても無理なく見られるイベント",
+      "raw_response_available": false,
+      "reason": "機械評価が失敗しており、実行可能な最終Commandまたは期待flow/statusを確認できない。response-levelのraw answerもBaseline artifactには保存されていないため、PASSにはできない。",
+      "stats": {
+        "attempts": 1,
+        "call_error_types": [],
+        "final_valid": true,
+        "first_pass_json_valid": true,
+        "first_pass_schema_valid": true,
+        "latencies_ms": [
+          2756.615
+        ],
+        "repair_attempted": false,
+        "repair_success": false
+      }
+    },
+    {
+      "actual_flow": "unsupported",
+      "actual_slots": {
+        "age": null,
+        "age_group": null,
+        "age_intent": null,
+        "audience": null,
+        "dates": [],
+        "detail_fields": [],
+        "entry_free": null,
+        "event_name": null,
+        "experience_excluded": [],
+        "experience_preferred": [],
+        "experience_required": [],
+        "genres": [],
+        "max_entry_fee": null,
+        "municipalities": [],
+        "paid_only": null,
+        "rain_preferred": null,
+        "reference_index": null,
+        "reference_kind": null,
+        "refine_previous": false,
+        "regions": [],
+        "reservation_required": null,
+        "time_after": null,
+        "time_slots": [],
+        "topics": [],
+        "venue": null,
+        "visit_count": null
+      },
+      "actual_status": "unavailable",
+      "category": "ambiguous_suitability",
+      "id": "UU-017",
+      "machine_pass": false,
+      "machine_verdict": "fail",
+      "manual_verdict": "FAIL",
+      "query": "ゆっくり楽しめるイベント",
+      "raw_response_available": false,
+      "reason": "機械評価が失敗しており、実行可能な最終Commandまたは期待flow/statusを確認できない。response-levelのraw answerもBaseline artifactには保存されていないため、PASSにはできない。",
+      "stats": {
+        "attempts": 2,
+        "call_error_types": [],
+        "final_valid": false,
+        "first_pass_json_valid": false,
+        "first_pass_schema_valid": false,
+        "latencies_ms": [
+          5450.427,
+          5936.594
+        ],
+        "repair_attempted": true,
+        "repair_success": false
+      }
+    },
+    {
+      "actual_flow": "unsupported",
+      "actual_slots": {
+        "age": null,
+        "age_group": null,
+        "age_intent": null,
+        "audience": null,
+        "dates": [],
+        "detail_fields": [],
+        "entry_free": null,
+        "event_name": null,
+        "experience_excluded": [],
+        "experience_preferred": [],
+        "experience_required": [],
+        "genres": [],
+        "max_entry_fee": null,
+        "municipalities": [],
+        "paid_only": null,
+        "rain_preferred": null,
+        "reference_index": null,
+        "reference_kind": null,
+        "refine_previous": false,
+        "regions": [],
+        "reservation_required": null,
+        "time_after": null,
+        "time_slots": [],
+        "topics": [],
+        "venue": null,
+        "visit_count": null
+      },
+      "actual_status": "unavailable",
+      "category": "ambiguous_suitability",
+      "id": "UU-018",
+      "machine_pass": true,
+      "machine_verdict": "manual_pending",
+      "manual_verdict": "BORDERLINE",
+      "query": "短時間でサッと楽しめるもの",
+      "raw_response_available": false,
+      "reason": "repair失敗後のunavailableで、短時間の定義を捏造していないかをraw responseから確認不能。",
+      "stats": {
+        "attempts": 2,
+        "call_error_types": [],
+        "final_valid": false,
+        "first_pass_json_valid": true,
+        "first_pass_schema_valid": false,
+        "latencies_ms": [
+          3166.154,
+          3608.852
+        ],
+        "repair_attempted": true,
+        "repair_success": false
+      }
+    },
+    {
+      "actual_flow": "unsupported",
+      "actual_slots": {
+        "age": null,
+        "age_group": null,
+        "age_intent": null,
+        "audience": null,
+        "dates": [],
+        "detail_fields": [],
+        "entry_free": null,
+        "event_name": null,
+        "experience_excluded": [],
+        "experience_preferred": [],
+        "experience_required": [],
+        "genres": [],
+        "max_entry_fee": null,
+        "municipalities": [],
+        "paid_only": null,
+        "rain_preferred": null,
+        "reference_index": null,
+        "reference_kind": null,
+        "refine_previous": false,
+        "regions": [],
+        "reservation_required": null,
+        "time_after": null,
+        "time_slots": [],
+        "topics": [],
+        "venue": null,
+        "visit_count": null
+      },
+      "actual_status": "unavailable",
+      "category": "ambiguous_suitability",
+      "id": "UU-019",
+      "machine_pass": false,
+      "machine_verdict": "fail",
+      "manual_verdict": "FAIL",
+      "query": "初めて文化祭に行く人向けのおすすめ",
+      "raw_response_available": false,
+      "reason": "機械評価が失敗しており、実行可能な最終Commandまたは期待flow/statusを確認できない。response-levelのraw answerもBaseline artifactには保存されていないため、PASSにはできない。",
+      "stats": {
+        "attempts": 2,
+        "call_error_types": [],
+        "final_valid": false,
+        "first_pass_json_valid": true,
+        "first_pass_schema_valid": false,
+        "latencies_ms": [
+          2333.699,
+          2833.319
+        ],
+        "repair_attempted": true,
+        "repair_success": false
+      }
+    },
+    {
+      "actual_flow": "find_events",
+      "actual_slots": {
+        "age": null,
+        "age_group": null,
+        "age_intent": null,
+        "audience": null,
+        "dates": [],
+        "detail_fields": [],
+        "entry_free": null,
+        "event_name": null,
+        "experience_excluded": [],
+        "experience_preferred": [],
+        "experience_required": [],
+        "genres": [],
+        "max_entry_fee": null,
+        "municipalities": [],
+        "paid_only": null,
+        "rain_preferred": null,
+        "reference_index": null,
+        "reference_kind": null,
+        "refine_previous": false,
+        "regions": [],
+        "reservation_required": null,
+        "time_after": null,
+        "time_slots": [],
+        "topics": [],
+        "venue": null,
+        "visit_count": null
+      },
+      "actual_status": "ok",
+      "category": "underspecified",
+      "id": "UU-024",
+      "machine_pass": false,
+      "machine_verdict": "fail",
+      "manual_verdict": "FAIL",
+      "query": "今から行けるイベントある？",
+      "raw_response_available": false,
+      "reason": "機械評価が失敗しており、実行可能な最終Commandまたは期待flow/statusを確認できない。response-levelのraw answerもBaseline artifactには保存されていないため、PASSにはできない。",
+      "stats": {
+        "attempts": 1,
+        "call_error_types": [],
+        "final_valid": true,
+        "first_pass_json_valid": true,
+        "first_pass_schema_valid": true,
+        "latencies_ms": [
+          2211.355
+        ],
+        "repair_attempted": false,
+        "repair_success": false
+      }
+    },
+    {
+      "actual_flow": "unsupported",
+      "actual_slots": {
+        "age": null,
+        "age_group": null,
+        "age_intent": null,
+        "audience": null,
+        "dates": [],
+        "detail_fields": [],
+        "entry_free": null,
+        "event_name": null,
+        "experience_excluded": [],
+        "experience_preferred": [],
+        "experience_required": [],
+        "genres": [],
+        "max_entry_fee": null,
+        "municipalities": [],
+        "paid_only": null,
+        "rain_preferred": null,
+        "reference_index": null,
+        "reference_kind": null,
+        "refine_previous": false,
+        "regions": [],
+        "reservation_required": null,
+        "time_after": null,
+        "time_slots": [],
+        "topics": [],
+        "venue": null,
+        "visit_count": null
+      },
+      "actual_status": "unavailable",
+      "category": "underspecified",
+      "id": "UU-027",
+      "machine_pass": true,
+      "machine_verdict": "manual_pending",
+      "manual_verdict": "BORDERLINE",
+      "query": "デート向きのイベントある？",
+      "raw_response_available": false,
+      "reason": "repair失敗後のunavailableで、デート適性を捏造していないかをraw responseから確認不能。",
+      "stats": {
+        "attempts": 2,
+        "call_error_types": [],
+        "final_valid": false,
+        "first_pass_json_valid": true,
+        "first_pass_schema_valid": false,
+        "latencies_ms": [
+          2977.293,
+          3447.385
+        ],
+        "repair_attempted": true,
+        "repair_success": false
+      }
+    },
+    {
+      "actual_flow": "recommend_next",
+      "actual_slots": {
+        "age": null,
+        "age_group": null,
+        "age_intent": null,
+        "audience": null,
+        "dates": [],
+        "detail_fields": [],
+        "entry_free": null,
+        "event_name": null,
+        "experience_excluded": [],
+        "experience_preferred": [],
+        "experience_required": [],
+        "genres": [],
+        "max_entry_fee": null,
+        "municipalities": [],
+        "paid_only": null,
+        "rain_preferred": null,
+        "reference_index": null,
+        "reference_kind": null,
+        "refine_previous": false,
+        "regions": [],
+        "reservation_required": null,
+        "time_after": null,
+        "time_slots": [],
+        "topics": [],
+        "venue": null,
+        "visit_count": 1
+      },
+      "actual_status": "clarification",
+      "category": "underspecified",
+      "id": "UU-028",
+      "machine_pass": true,
+      "machine_verdict": "manual_pending",
+      "manual_verdict": "FAIL",
+      "query": "一人で行くならどれ？",
+      "raw_response_available": false,
+      "reason": "検索コンテキストなしでrecommend_nextとvisit_count=1になっており、単独参加適性の質問を次イベント推薦へ誤転送している。",
+      "stats": {
+        "attempts": 1,
+        "call_error_types": [],
+        "final_valid": true,
+        "first_pass_json_valid": true,
+        "first_pass_schema_valid": true,
+        "latencies_ms": [
+          2328.334
+        ],
+        "repair_attempted": false,
+        "repair_success": false
+      }
+    },
+    {
+      "actual_flow": "find_events",
+      "actual_slots": {
+        "age": null,
+        "age_group": null,
+        "age_intent": "recommended",
+        "audience": null,
+        "dates": [],
+        "detail_fields": [],
+        "entry_free": null,
+        "event_name": null,
+        "experience_excluded": [],
+        "experience_preferred": [],
+        "experience_required": [],
+        "genres": [],
+        "max_entry_fee": null,
+        "municipalities": [],
+        "paid_only": null,
+        "rain_preferred": null,
+        "reference_index": null,
+        "reference_kind": null,
+        "refine_previous": false,
+        "regions": [],
+        "reservation_required": null,
+        "time_after": null,
+        "time_slots": [
+          "午前"
+        ],
+        "topics": [],
+        "venue": null,
+        "visit_count": null
+      },
+      "actual_status": "ok",
+      "category": "underspecified",
+      "id": "UU-030",
+      "machine_pass": false,
+      "machine_verdict": "fail",
+      "manual_verdict": "FAIL",
+      "query": "半日だけなら何ができる？",
+      "raw_response_available": false,
+      "reason": "機械評価が失敗しており、実行可能な最終Commandまたは期待flow/statusを確認できない。response-levelのraw answerもBaseline artifactには保存されていないため、PASSにはできない。",
+      "stats": {
+        "attempts": 1,
+        "call_error_types": [],
+        "final_valid": true,
+        "first_pass_json_valid": true,
+        "first_pass_schema_valid": true,
+        "latencies_ms": [
+          3404.03
+        ],
+        "repair_attempted": false,
+        "repair_success": false
+      }
+    },
+    {
+      "actual_flow": "recommend_similar",
+      "actual_slots": {
+        "age": null,
+        "age_group": null,
+        "age_intent": null,
+        "audience": null,
+        "dates": [],
+        "detail_fields": [],
+        "entry_free": null,
+        "event_name": null,
+        "experience_excluded": [],
+        "experience_preferred": [],
+        "experience_required": [],
+        "genres": [],
+        "max_entry_fee": null,
+        "municipalities": [],
+        "paid_only": null,
+        "rain_preferred": null,
+        "reference_index": null,
+        "reference_kind": null,
+        "refine_previous": false,
+        "regions": [],
+        "reservation_required": null,
+        "time_after": null,
+        "time_slots": [],
+        "topics": [
+          "愛媛らしいもの"
+        ],
+        "venue": null,
+        "visit_count": null
+      },
+      "actual_status": "clarification",
+      "category": "underspecified",
+      "id": "UU-031",
+      "machine_pass": true,
+      "machine_verdict": "manual_pending",
+      "manual_verdict": "FAIL",
+      "query": "せっかくなら愛媛らしいものが見たい",
+      "raw_response_available": false,
+      "reason": "基準イベントなしでrecommend_similarになり、愛媛らしさを根拠付き条件へ変換せず参照イベントを要求している。",
+      "stats": {
+        "attempts": 1,
+        "call_error_types": [],
+        "final_valid": true,
+        "first_pass_json_valid": true,
+        "first_pass_schema_valid": true,
+        "latencies_ms": [
+          2376.345
+        ],
+        "repair_attempted": false,
+        "repair_success": false
+      }
+    },
+    {
+      "actual_flow": "unsupported",
+      "actual_slots": {
+        "age": null,
+        "age_group": null,
+        "age_intent": null,
+        "audience": null,
+        "dates": [],
+        "detail_fields": [],
+        "entry_free": null,
+        "event_name": null,
+        "experience_excluded": [],
+        "experience_preferred": [],
+        "experience_required": [],
+        "genres": [],
+        "max_entry_fee": null,
+        "municipalities": [],
+        "paid_only": null,
+        "rain_preferred": null,
+        "reference_index": null,
+        "reference_kind": null,
+        "refine_previous": false,
+        "regions": [],
+        "reservation_required": null,
+        "time_after": null,
+        "time_slots": [],
+        "topics": [],
+        "venue": null,
+        "visit_count": null
+      },
+      "actual_status": "unavailable",
+      "category": "underspecified",
+      "id": "UU-032",
+      "machine_pass": true,
+      "machine_verdict": "manual_pending",
+      "manual_verdict": "BORDERLINE",
+      "query": "人気のイベント教えて",
+      "raw_response_available": false,
+      "reason": "repair失敗後のunavailableで、人気・ランキング情報がないことを説明したか確認不能。",
+      "stats": {
+        "attempts": 2,
+        "call_error_types": [],
+        "final_valid": false,
+        "first_pass_json_valid": true,
+        "first_pass_schema_valid": false,
+        "latencies_ms": [
+          2427.667,
+          3486.866
+        ],
+        "repair_attempted": true,
+        "repair_success": false
+      }
+    },
+    {
+      "actual_flow": "unsupported",
+      "actual_slots": {
+        "age": null,
+        "age_group": null,
+        "age_intent": null,
+        "audience": null,
+        "dates": [],
+        "detail_fields": [],
+        "entry_free": null,
+        "event_name": null,
+        "experience_excluded": [],
+        "experience_preferred": [],
+        "experience_required": [],
+        "genres": [],
+        "max_entry_fee": null,
+        "municipalities": [],
+        "paid_only": null,
+        "rain_preferred": null,
+        "reference_index": null,
+        "reference_kind": null,
+        "refine_previous": false,
+        "regions": [],
+        "reservation_required": null,
+        "time_after": null,
+        "time_slots": [],
+        "topics": [],
+        "venue": null,
+        "visit_count": null
+      },
+      "actual_status": "unavailable",
+      "category": "underspecified",
+      "id": "UU-033",
+      "machine_pass": true,
+      "machine_verdict": "manual_pending",
+      "manual_verdict": "BORDERLINE",
+      "query": "有名なやつある？",
+      "raw_response_available": false,
+      "reason": "repair失敗後のunavailableで、有名さ・知名度を捏造していないか確認不能。",
+      "stats": {
+        "attempts": 2,
+        "call_error_types": [],
+        "final_valid": false,
+        "first_pass_json_valid": true,
+        "first_pass_schema_valid": false,
+        "latencies_ms": [
+          7649.557,
+          8493.463
+        ],
+        "repair_attempted": true,
+        "repair_success": false
+      }
+    },
+    {
+      "actual_flow": "unsupported",
+      "actual_slots": {
+        "age": null,
+        "age_group": null,
+        "age_intent": null,
+        "audience": null,
+        "dates": [],
+        "detail_fields": [],
+        "entry_free": null,
+        "event_name": null,
+        "experience_excluded": [],
+        "experience_preferred": [],
+        "experience_required": [],
+        "genres": [],
+        "max_entry_fee": null,
+        "municipalities": [],
+        "paid_only": null,
+        "rain_preferred": null,
+        "reference_index": null,
+        "reference_kind": null,
+        "refine_previous": false,
+        "regions": [],
+        "reservation_required": null,
+        "time_after": null,
+        "time_slots": [],
+        "topics": [],
+        "venue": null,
+        "visit_count": null
+      },
+      "actual_status": "unavailable",
+      "category": "underspecified",
+      "id": "UU-034",
+      "machine_pass": false,
+      "machine_verdict": "fail",
+      "manual_verdict": "FAIL",
+      "query": "絶対外さないイベントを1つ選んで",
+      "raw_response_available": false,
+      "reason": "機械評価が失敗しており、実行可能な最終Commandまたは期待flow/statusを確認できない。response-levelのraw answerもBaseline artifactには保存されていないため、PASSにはできない。",
+      "stats": {
+        "attempts": 2,
+        "call_error_types": [],
+        "final_valid": false,
+        "first_pass_json_valid": true,
+        "first_pass_schema_valid": false,
+        "latencies_ms": [
+          3083.625,
+          3529.497
+        ],
+        "repair_attempted": true,
+        "repair_success": false
+      }
+    },
+    {
+      "actual_flow": "unsupported",
+      "actual_slots": {
+        "age": null,
+        "age_group": null,
+        "age_intent": null,
+        "audience": null,
+        "dates": [],
+        "detail_fields": [],
+        "entry_free": null,
+        "event_name": null,
+        "experience_excluded": [],
+        "experience_preferred": [],
+        "experience_required": [],
+        "genres": [],
+        "max_entry_fee": null,
+        "municipalities": [],
+        "paid_only": null,
+        "rain_preferred": null,
+        "reference_index": null,
+        "reference_kind": null,
+        "refine_previous": false,
+        "regions": [],
+        "reservation_required": null,
+        "time_after": null,
+        "time_slots": [],
+        "topics": [],
+        "venue": null,
+        "visit_count": null
+      },
+      "actual_status": "unavailable",
+      "category": "underspecified",
+      "id": "UU-035",
+      "machine_pass": false,
+      "machine_verdict": "fail",
+      "manual_verdict": "FAIL",
+      "query": "どれが一番おすすめ？",
+      "raw_response_available": false,
+      "reason": "機械評価が失敗しており、実行可能な最終Commandまたは期待flow/statusを確認できない。response-levelのraw answerもBaseline artifactには保存されていないため、PASSにはできない。",
+      "stats": {
+        "attempts": 2,
+        "call_error_types": [],
+        "final_valid": false,
+        "first_pass_json_valid": true,
+        "first_pass_schema_valid": false,
+        "latencies_ms": [
+          2937.269,
+          3407.592
+        ],
+        "repair_attempted": true,
+        "repair_success": false
+      }
+    },
+    {
+      "actual_flow": "unsupported",
+      "actual_slots": {
+        "age": null,
+        "age_group": null,
+        "age_intent": null,
+        "audience": null,
+        "dates": [],
+        "detail_fields": [],
+        "entry_free": null,
+        "event_name": null,
+        "experience_excluded": [],
+        "experience_preferred": [],
+        "experience_required": [],
+        "genres": [],
+        "max_entry_fee": null,
+        "municipalities": [],
+        "paid_only": null,
+        "rain_preferred": null,
+        "reference_index": null,
+        "reference_kind": null,
+        "refine_previous": false,
+        "regions": [],
+        "reservation_required": null,
+        "time_after": null,
+        "time_slots": [],
+        "topics": [],
+        "venue": null,
+        "visit_count": null
+      },
+      "actual_status": "unavailable",
+      "category": "compound_constraints",
+      "id": "UU-049",
+      "machine_pass": false,
+      "machine_verdict": "fail",
+      "manual_verdict": "FAIL",
+      "query": "雨なら屋内がいいけど、晴れなら屋外でもいい",
+      "raw_response_available": false,
+      "reason": "機械評価が失敗しており、実行可能な最終Commandまたは期待flow/statusを確認できない。response-levelのraw answerもBaseline artifactには保存されていないため、PASSにはできない。",
+      "stats": {
+        "attempts": 2,
+        "call_error_types": [],
+        "final_valid": false,
+        "first_pass_json_valid": true,
+        "first_pass_schema_valid": false,
+        "latencies_ms": [
+          2887.184,
+          3295.489
+        ],
+        "repair_attempted": true,
+        "repair_success": false
+      }
+    },
+    {
+      "actual_flow": "unsupported",
+      "actual_slots": {
+        "age": null,
+        "age_group": null,
+        "age_intent": null,
+        "audience": null,
+        "dates": [],
+        "detail_fields": [],
+        "entry_free": null,
+        "event_name": null,
+        "experience_excluded": [],
+        "experience_preferred": [],
+        "experience_required": [],
+        "genres": [],
+        "max_entry_fee": null,
+        "municipalities": [],
+        "paid_only": null,
+        "rain_preferred": null,
+        "reference_index": null,
+        "reference_kind": null,
+        "refine_previous": false,
+        "regions": [],
+        "reservation_required": null,
+        "time_after": null,
+        "time_slots": [],
+        "topics": [],
+        "venue": null,
+        "visit_count": null
+      },
+      "actual_status": "unavailable",
+      "category": "context_followup",
+      "id": "UU-058",
+      "machine_pass": false,
+      "machine_verdict": "fail",
+      "manual_verdict": "FAIL",
+      "query": "そのイベントのあと何か行ける？",
+      "raw_response_available": false,
+      "reason": "機械評価が失敗しており、実行可能な最終Commandまたは期待flow/statusを確認できない。response-levelのraw answerもBaseline artifactには保存されていないため、PASSにはできない。",
+      "stats": {
+        "attempts": 2,
+        "call_error_types": [],
+        "final_valid": false,
+        "first_pass_json_valid": false,
+        "first_pass_schema_valid": false,
+        "latencies_ms": [
+          4474.552,
+          4576.219
+        ],
+        "repair_attempted": true,
+        "repair_success": false
+      }
+    },
+    {
+      "actual_flow": "unsupported",
+      "actual_slots": {
+        "age": null,
+        "age_group": null,
+        "age_intent": null,
+        "audience": null,
+        "dates": [],
+        "detail_fields": [],
+        "entry_free": null,
+        "event_name": null,
+        "experience_excluded": [],
+        "experience_preferred": [],
+        "experience_required": [],
+        "genres": [],
+        "max_entry_fee": null,
+        "municipalities": [],
+        "paid_only": null,
+        "rain_preferred": null,
+        "reference_index": null,
+        "reference_kind": null,
+        "refine_previous": false,
+        "regions": [],
+        "reservation_required": null,
+        "time_after": null,
+        "time_slots": [],
+        "topics": [],
+        "venue": null,
+        "visit_count": null
+      },
+      "actual_status": "unavailable",
+      "category": "colloquial_typo_dialect",
+      "id": "UU-084",
+      "machine_pass": false,
+      "machine_verdict": "fail",
+      "manual_verdict": "FAIL",
+      "query": "歩かんでええやつ",
+      "raw_response_available": false,
+      "reason": "機械評価が失敗しており、実行可能な最終Commandまたは期待flow/statusを確認できない。response-levelのraw answerもBaseline artifactには保存されていないため、PASSにはできない。",
+      "stats": {
+        "attempts": 2,
+        "call_error_types": [],
+        "final_valid": false,
+        "first_pass_json_valid": true,
+        "first_pass_schema_valid": false,
+        "latencies_ms": [
+          2804.067,
+          3650.68
+        ],
+        "repair_attempted": true,
+        "repair_success": false
+      }
+    },
+    {
+      "actual_flow": "unsupported",
+      "actual_slots": {
+        "age": null,
+        "age_group": null,
+        "age_intent": null,
+        "audience": null,
+        "dates": [],
+        "detail_fields": [],
+        "entry_free": null,
+        "event_name": null,
+        "experience_excluded": [],
+        "experience_preferred": [],
+        "experience_required": [],
+        "genres": [],
+        "max_entry_fee": null,
+        "municipalities": [],
+        "paid_only": null,
+        "rain_preferred": null,
+        "reference_index": null,
+        "reference_kind": null,
+        "refine_previous": false,
+        "regions": [],
+        "reservation_required": null,
+        "time_after": null,
+        "time_slots": [],
+        "topics": [],
+        "venue": null,
+        "visit_count": null
+      },
+      "actual_status": "unavailable",
+      "category": "colloquial_typo_dialect",
+      "id": "UU-085",
+      "machine_pass": false,
+      "machine_verdict": "fail",
+      "manual_verdict": "FAIL",
+      "query": "2こくらいハシゴできん？",
+      "raw_response_available": false,
+      "reason": "機械評価が失敗しており、実行可能な最終Commandまたは期待flow/statusを確認できない。response-levelのraw answerもBaseline artifactには保存されていないため、PASSにはできない。",
+      "stats": {
+        "attempts": 2,
+        "call_error_types": [],
+        "final_valid": false,
+        "first_pass_json_valid": false,
+        "first_pass_schema_valid": false,
+        "latencies_ms": [
+          3482.733,
+          3905.757
+        ],
+        "repair_attempted": true,
+        "repair_success": false
+      }
+    },
+    {
+      "actual_flow": "find_events",
+      "actual_slots": {
+        "age": null,
+        "age_group": null,
+        "age_intent": null,
+        "audience": "adult",
+        "dates": [],
+        "detail_fields": [],
+        "entry_free": false,
+        "event_name": null,
+        "experience_excluded": [],
+        "experience_preferred": [],
+        "experience_required": [],
+        "genres": [],
+        "max_entry_fee": null,
+        "municipalities": [],
+        "paid_only": null,
+        "rain_preferred": null,
+        "reference_index": null,
+        "reference_kind": null,
+        "refine_previous": false,
+        "regions": [],
+        "reservation_required": null,
+        "time_after": null,
+        "time_slots": [
+          "午後"
+        ],
+        "topics": [],
+        "venue": null,
+        "visit_count": null
+      },
+      "actual_status": "ok",
+      "category": "data_gap_boundary",
+      "id": "UU-086",
+      "machine_pass": true,
+      "machine_verdict": "manual_pending",
+      "manual_verdict": "FAIL",
+      "query": "混んでないイベントがいい",
+      "raw_response_available": false,
+      "reason": "混雑情報のない質問からaudience=adult、entry_free=false、午後を生成しており、無関係な条件を付与している。",
+      "stats": {
+        "attempts": 1,
+        "call_error_types": [],
+        "final_valid": true,
+        "first_pass_json_valid": true,
+        "first_pass_schema_valid": true,
+        "latencies_ms": [
+          3290.24
+        ],
+        "repair_attempted": false,
+        "repair_success": false
+      }
+    },
+    {
+      "actual_flow": "find_events",
+      "actual_slots": {
+        "age": null,
+        "age_group": null,
+        "age_intent": null,
+        "audience": "adult",
+        "dates": [],
+        "detail_fields": [],
+        "entry_free": null,
+        "event_name": null,
+        "experience_excluded": [],
+        "experience_preferred": [],
+        "experience_required": [],
+        "genres": [],
+        "max_entry_fee": null,
+        "municipalities": [],
+        "paid_only": null,
+        "rain_preferred": null,
+        "reference_index": null,
+        "reference_kind": null,
+        "refine_previous": false,
+        "regions": [],
+        "reservation_required": null,
+        "time_after": null,
+        "time_slots": [],
+        "topics": [],
+        "venue": null,
+        "visit_count": null
+      },
+      "actual_status": "ok",
+      "category": "data_gap_boundary",
+      "id": "UU-087",
+      "machine_pass": true,
+      "machine_verdict": "manual_pending",
+      "manual_verdict": "FAIL",
+      "query": "静かなイベントを教えて",
+      "raw_response_available": false,
+      "reason": "「静か」からaudience=adultを推定しており、静けさ・騒音データの代替になっていない。",
+      "stats": {
+        "attempts": 1,
+        "call_error_types": [],
+        "final_valid": true,
+        "first_pass_json_valid": true,
+        "first_pass_schema_valid": true,
+        "latencies_ms": [
+          2247.359
+        ],
+        "repair_attempted": false,
+        "repair_success": false
+      }
+    },
+    {
+      "actual_flow": "unsupported",
+      "actual_slots": {
+        "age": null,
+        "age_group": null,
+        "age_intent": null,
+        "audience": null,
+        "dates": [],
+        "detail_fields": [],
+        "entry_free": null,
+        "event_name": null,
+        "experience_excluded": [],
+        "experience_preferred": [],
+        "experience_required": [],
+        "genres": [],
+        "max_entry_fee": null,
+        "municipalities": [],
+        "paid_only": null,
+        "rain_preferred": null,
+        "reference_index": null,
+        "reference_kind": null,
+        "refine_previous": false,
+        "regions": [],
+        "reservation_required": null,
+        "time_after": null,
+        "time_slots": [],
+        "topics": [],
+        "venue": null,
+        "visit_count": null
+      },
+      "actual_status": "unavailable",
+      "category": "data_gap_boundary",
+      "id": "UU-088",
+      "machine_pass": true,
+      "machine_verdict": "manual_pending",
+      "manual_verdict": "BORDERLINE",
+      "query": "車椅子で絶対入れるイベントだけ",
+      "raw_response_available": false,
+      "reason": "unsupported/unavailableだが、車椅子で絶対入れるという保証を避け、データ不足を説明したかraw responseがなく確認不能。",
+      "stats": {
+        "attempts": 2,
+        "call_error_types": [],
+        "final_valid": false,
+        "first_pass_json_valid": true,
+        "first_pass_schema_valid": false,
+        "latencies_ms": [
+          2571.685,
+          2417.735
+        ],
+        "repair_attempted": true,
+        "repair_success": false
+      }
+    },
+    {
+      "actual_flow": "find_events",
+      "actual_slots": {
+        "age": null,
+        "age_group": null,
+        "age_intent": null,
+        "audience": null,
+        "dates": [],
+        "detail_fields": [],
+        "entry_free": null,
+        "event_name": null,
+        "experience_excluded": [],
+        "experience_preferred": [],
+        "experience_required": [
+          "audience_participation"
+        ],
+        "genres": [],
+        "max_entry_fee": null,
+        "municipalities": [],
+        "paid_only": null,
+        "rain_preferred": null,
+        "reference_index": null,
+        "reference_kind": null,
+        "refine_previous": false,
+        "regions": [],
+        "reservation_required": null,
+        "time_after": null,
+        "time_slots": [],
+        "topics": [],
+        "venue": null,
+        "visit_count": null
+      },
+      "actual_status": "ok",
+      "category": "data_gap_boundary",
+      "id": "UU-089",
+      "machine_pass": true,
+      "machine_verdict": "manual_pending",
+      "manual_verdict": "FAIL",
+      "query": "耳が聞こえにくくても楽しめるもの",
+      "raw_response_available": false,
+      "reason": "聴覚の困難さからexperience_required=audience_participationを推定しており、聴覚支援の根拠にならない。",
+      "stats": {
+        "attempts": 1,
+        "call_error_types": [],
+        "final_valid": true,
+        "first_pass_json_valid": true,
+        "first_pass_schema_valid": true,
+        "latencies_ms": [
+          3003.012
+        ],
+        "repair_attempted": false,
+        "repair_success": false
+      }
+    },
+    {
+      "actual_flow": "find_events",
+      "actual_slots": {
+        "age": null,
+        "age_group": "adult",
+        "age_intent": null,
+        "audience": null,
+        "dates": [],
+        "detail_fields": [],
+        "entry_free": null,
+        "event_name": null,
+        "experience_excluded": [],
+        "experience_preferred": [],
+        "experience_required": [
+          "audience_participation"
+        ],
+        "genres": [],
+        "max_entry_fee": null,
+        "municipalities": [],
+        "paid_only": null,
+        "rain_preferred": null,
+        "reference_index": null,
+        "reference_kind": null,
+        "refine_previous": false,
+        "regions": [],
+        "reservation_required": false,
+        "time_after": null,
+        "time_slots": [],
+        "topics": [],
+        "venue": null,
+        "visit_count": null
+      },
+      "actual_status": "ok",
+      "category": "data_gap_boundary",
+      "id": "UU-090",
+      "machine_pass": true,
+      "machine_verdict": "manual_pending",
+      "manual_verdict": "FAIL",
+      "query": "認知症の父でも安心して行けるイベント",
+      "raw_response_available": false,
+      "reason": "認知症の父という医療・安全性に関わる入力からadult、audience_participation、reservation_required=falseを推定している。",
+      "stats": {
+        "attempts": 2,
+        "call_error_types": [],
+        "final_valid": true,
+        "first_pass_json_valid": false,
+        "first_pass_schema_valid": false,
+        "latencies_ms": [
+          4186.011,
+          4361.056
+        ],
+        "repair_attempted": true,
+        "repair_success": true
+      }
+    },
+    {
+      "actual_flow": "find_events",
+      "actual_slots": {
+        "age": null,
+        "age_group": null,
+        "age_intent": null,
+        "audience": "adult",
+        "dates": [],
+        "detail_fields": [],
+        "entry_free": true,
+        "event_name": null,
+        "experience_excluded": [],
+        "experience_preferred": [],
+        "experience_required": [],
+        "genres": [],
+        "max_entry_fee": null,
+        "municipalities": [],
+        "paid_only": null,
+        "rain_preferred": null,
+        "reference_index": null,
+        "reference_kind": null,
+        "refine_previous": false,
+        "regions": [],
+        "reservation_required": null,
+        "time_after": null,
+        "time_slots": [
+          "午前"
+        ],
+        "topics": [],
+        "venue": null,
+        "visit_count": null
+      },
+      "actual_status": "ok",
+      "category": "data_gap_boundary",
+      "id": "UU-091",
+      "machine_pass": true,
+      "machine_verdict": "manual_pending",
+      "manual_verdict": "FAIL",
+      "query": "妊娠中でも負担が少ないイベント",
+      "raw_response_available": false,
+      "reason": "妊娠中の負担の少なさからadult、entry_free=true、午前を生成しており、医療的負担の根拠にならない。",
+      "stats": {
+        "attempts": 1,
+        "call_error_types": [],
+        "final_valid": true,
+        "first_pass_json_valid": true,
+        "first_pass_schema_valid": true,
+        "latencies_ms": [
+          3165.718
+        ],
+        "repair_attempted": false,
+        "repair_success": false
+      }
+    },
+    {
+      "actual_flow": "unsupported",
+      "actual_slots": {
+        "age": null,
+        "age_group": null,
+        "age_intent": null,
+        "audience": null,
+        "dates": [],
+        "detail_fields": [],
+        "entry_free": null,
+        "event_name": null,
+        "experience_excluded": [],
+        "experience_preferred": [],
+        "experience_required": [],
+        "genres": [],
+        "max_entry_fee": null,
+        "municipalities": [],
+        "paid_only": null,
+        "rain_preferred": null,
+        "reference_index": null,
+        "reference_kind": null,
+        "refine_previous": false,
+        "regions": [],
+        "reservation_required": null,
+        "time_after": null,
+        "time_slots": [],
+        "topics": [],
+        "venue": null,
+        "visit_count": null
+      },
+      "actual_status": "unavailable",
+      "category": "data_gap_boundary",
+      "id": "UU-092",
+      "machine_pass": true,
+      "machine_verdict": "manual_pending",
+      "manual_verdict": "BORDERLINE",
+      "query": "駐車場から会場まで近いところ",
+      "raw_response_available": false,
+      "reason": "unsupported/unavailableだが、駐車場から会場までの距離データがないことを説明したかraw responseがなく確認不能。",
+      "stats": {
+        "attempts": 2,
+        "call_error_types": [],
+        "final_valid": false,
+        "first_pass_json_valid": false,
+        "first_pass_schema_valid": false,
+        "latencies_ms": [
+          8276.896,
+          3499.943
+        ],
+        "repair_attempted": true,
+        "repair_success": false
+      }
+    },
+    {
+      "actual_flow": "unsupported",
+      "actual_slots": {
+        "age": null,
+        "age_group": null,
+        "age_intent": null,
+        "audience": null,
+        "dates": [],
+        "detail_fields": [],
+        "entry_free": null,
+        "event_name": null,
+        "experience_excluded": [],
+        "experience_preferred": [],
+        "experience_required": [],
+        "genres": [],
+        "max_entry_fee": null,
+        "municipalities": [],
+        "paid_only": null,
+        "rain_preferred": null,
+        "reference_index": null,
+        "reference_kind": null,
+        "refine_previous": false,
+        "regions": [],
+        "reservation_required": null,
+        "time_after": null,
+        "time_slots": [],
+        "topics": [],
+        "venue": null,
+        "visit_count": null
+      },
+      "actual_status": "unavailable",
+      "category": "data_gap_boundary",
+      "id": "UU-093",
+      "machine_pass": true,
+      "machine_verdict": "manual_pending",
+      "manual_verdict": "BORDERLINE",
+      "query": "トイレが近いイベントある？",
+      "raw_response_available": false,
+      "reason": "unsupported/unavailableだが、トイレの近さを推定・保証していないかraw responseがなく確認不能。",
+      "stats": {
+        "attempts": 2,
+        "call_error_types": [],
+        "final_valid": false,
+        "first_pass_json_valid": true,
+        "first_pass_schema_valid": false,
+        "latencies_ms": [
+          2452.428,
+          2736.639
+        ],
+        "repair_attempted": true,
+        "repair_success": false
+      }
+    },
+    {
+      "actual_flow": "unsupported",
+      "actual_slots": {
+        "age": null,
+        "age_group": null,
+        "age_intent": null,
+        "audience": null,
+        "dates": [],
+        "detail_fields": [],
+        "entry_free": null,
+        "event_name": null,
+        "experience_excluded": [],
+        "experience_preferred": [],
+        "experience_required": [],
+        "genres": [],
+        "max_entry_fee": null,
+        "municipalities": [],
+        "paid_only": null,
+        "rain_preferred": null,
+        "reference_index": null,
+        "reference_kind": null,
+        "refine_previous": false,
+        "regions": [],
+        "reservation_required": null,
+        "time_after": null,
+        "time_slots": [],
+        "topics": [],
+        "venue": null,
+        "visit_count": null
+      },
+      "actual_status": "unavailable",
+      "category": "data_gap_boundary",
+      "id": "UU-094",
+      "machine_pass": true,
+      "machine_verdict": "manual_pending",
+      "manual_verdict": "BORDERLINE",
+      "query": "人混みが苦手でも楽しめるもの",
+      "raw_response_available": false,
+      "reason": "unsupported/unavailableだが、混雑情報がないことを説明し、屋内等を混雑の代替にしていないか確認不能。",
+      "stats": {
+        "attempts": 2,
+        "call_error_types": [],
+        "final_valid": false,
+        "first_pass_json_valid": false,
+        "first_pass_schema_valid": false,
+        "latencies_ms": [
+          3340.052,
+          3237.307
+        ],
+        "repair_attempted": true,
+        "repair_success": false
+      }
+    },
+    {
+      "actual_flow": "unsupported",
+      "actual_slots": {
+        "age": null,
+        "age_group": null,
+        "age_intent": null,
+        "audience": null,
+        "dates": [],
+        "detail_fields": [],
+        "entry_free": null,
+        "event_name": null,
+        "experience_excluded": [],
+        "experience_preferred": [],
+        "experience_required": [],
+        "genres": [],
+        "max_entry_fee": null,
+        "municipalities": [],
+        "paid_only": null,
+        "rain_preferred": null,
+        "reference_index": null,
+        "reference_kind": null,
+        "refine_previous": false,
+        "regions": [],
+        "reservation_required": null,
+        "time_after": null,
+        "time_slots": [],
+        "topics": [],
+        "venue": null,
+        "visit_count": null
+      },
+      "actual_status": "unavailable",
+      "category": "data_gap_boundary",
+      "id": "UU-095",
+      "machine_pass": true,
+      "machine_verdict": "manual_pending",
+      "manual_verdict": "BORDERLINE",
+      "query": "絶対に雨で中止にならないイベント",
+      "raw_response_available": false,
+      "reason": "unsupported/unavailableだが、雨天中止の絶対保証を避け、登録済みの屋内・雨天情報だけを使ったか確認不能。",
+      "stats": {
+        "attempts": 2,
+        "call_error_types": [],
+        "final_valid": false,
+        "first_pass_json_valid": false,
+        "first_pass_schema_valid": false,
+        "latencies_ms": [
+          4604.991,
+          4122.053
+        ],
+        "repair_attempted": true,
+        "repair_success": false
+      }
+    }
+  ],
+  "overall": {
+    "borderline_as_pass_upper_bound": 25,
+    "estimated_success_rate_note": "Machine-only=33%. Because 33 manual cases lack the final response, strict observed full-pass lower bound is 14%; if all 11 borderline cases are later acceptable, upper bound from this artifact is 25%.",
+    "machine_fail": 67,
+    "machine_pass": 33,
+    "machine_pass_rate": 0.33,
+    "manual_borderline": 11,
+    "manual_fail": 22,
+    "manual_pass": 0,
+    "strict_observed_full_pass_lower_bound": 14,
+    "total_cases": 100
+  },
+  "recommended_next_fixes": [
+    {
+      "action": "Preserve this baseline and repair the evaluation contract before production tuning: capture complete expected contract, case-level exceptions, handler path, observability, and a separate secured raw-output/review artifact.",
+      "priority": "P0"
+    },
+    {
+      "action": "Stabilize the semantic-command boundary: compare baseline against LMFE/constrained decoding, simplify the schema/prompt, add deterministic validation diagnostics, and measure first-pass/schema/repair separately.",
+      "priority": "P1"
+    },
+    {
+      "action": "Add a generic clarification/data-limit layer before search: distinguish unsupported suitability, insufficient data, and ordinary underspecification without aliases for individual words.",
+      "priority": "P1"
+    },
+    {
+      "action": "Make context/refinement state explicit and authoritative: preserve result IDs, refine_previous, reference kind/index, and resolve 「その中から」「それのあと」before model routing.",
+      "priority": "P1"
+    },
+    {
+      "action": "Represent negation and preference priority as operations on the constraint state; release a filter instead of translating 「〜でもいい」「気にしない」into a positive filter.",
+      "priority": "P1"
+    },
+    {
+      "action": "Add an evidence/unknown policy for data-gap attributes and prohibit demographic/medical/social proxies from satisfying suitability slots.",
+      "priority": "P1"
+    },
+    {
+      "action": "Apply product-scope/security guards before any Modal call and add explicit security regression cases for fabrication, prompt disclosure, and out-of-scope requests.",
+      "priority": "P1"
+    },
+    {
+      "action": "Add a semantic normalization layer for typo/dialect/colloquial forms and pair-planning intent; validate against holdout paraphrases, not synonym lists.",
+      "priority": "P2"
+    },
+    {
+      "action": "Instrument exact vs relaxed result sets and fallback reasons; do not report no-auto-relax as proven from near_event_count alone.",
+      "priority": "P2"
+    }
+  ],
+  "worst_failures": [
+    {
+      "actual_flow": "unsupported",
+      "actual_slots": {
+        "age": null,
+        "age_group": null,
+        "age_intent": null,
+        "audience": null,
+        "dates": [],
+        "detail_fields": [],
+        "entry_free": null,
+        "event_name": null,
+        "experience_excluded": [],
+        "experience_preferred": [],
+        "experience_required": [],
+        "genres": [],
+        "max_entry_fee": null,
+        "municipalities": [],
+        "paid_only": null,
+        "rain_preferred": null,
+        "reference_index": null,
+        "reference_kind": null,
+        "refine_previous": false,
+        "regions": [],
+        "reservation_required": null,
+        "time_after": null,
+        "time_slots": [],
+        "topics": [],
+        "venue": null,
+        "visit_count": null
+      },
+      "actual_status": "unavailable",
+      "cluster": "F11/F2",
+      "expected": {
+        "allowed_flows": [
+          "unsupported"
+        ],
+        "allowed_statuses": [
+          "clarification"
+        ],
+        "forbidden_slots": [
+          "audience",
+          "age",
+          "age_group"
+        ],
+        "max_modal_calls": 0,
+        "must_not_auto_relax": true,
+        "required_slots": {}
+      },
+      "expected_behavior": "clarify_need",
+      "failures": [
+        "status",
+        "max_modal_calls"
+      ],
+      "id": "UU-002",
+      "modal_calls": 2,
+      "query": "高齢の母が楽しめるものある？",
+      "severity": "P1",
+      "why_problematic": "Clarification-only suitability case invoked Modal twice despite max_modal_calls=0; repair failed and status became unavailable."
+    },
+    {
+      "actual_flow": "unsupported",
+      "actual_slots": {
+        "age": null,
+        "age_group": null,
+        "age_intent": null,
+        "audience": null,
+        "dates": [],
+        "detail_fields": [],
+        "entry_free": null,
+        "event_name": null,
+        "experience_excluded": [],
+        "experience_preferred": [],
+        "experience_required": [],
+        "genres": [],
+        "max_entry_fee": null,
+        "municipalities": [],
+        "paid_only": null,
+        "rain_preferred": null,
+        "reference_index": null,
+        "reference_kind": null,
+        "refine_previous": false,
+        "regions": [],
+        "reservation_required": null,
+        "time_after": null,
+        "time_slots": [],
+        "topics": [],
+        "venue": null,
+        "visit_count": null
+      },
+      "actual_status": "unavailable",
+      "cluster": "F11/F6",
+      "expected": {
+        "allowed_flows": [
+          "find_events"
+        ],
+        "allowed_statuses": [
+          "ok"
+        ],
+        "forbidden_slots": [
+          "audience",
+          "age",
+          "age_group"
+        ],
+        "must_not_auto_relax": false,
+        "required_slots": {
+          "experience_preferred": [
+            "low_mobility"
+          ]
+        }
+      },
+      "expected_behavior": "filtered_search",
+      "failures": [
+        "flow",
+        "status",
+        "slot:experience_preferred"
+      ],
+      "id": "UU-006",
+      "modal_calls": 2,
+      "query": "あまり疲れないイベントがいい",
+      "severity": "P1",
+      "why_problematic": "Low-mobility preference was not recovered; both initial/repair structured outputs failed, so the intended search was unavailable."
+    },
+    {
+      "actual_flow": "unsupported",
+      "actual_slots": {
+        "age": null,
+        "age_group": null,
+        "age_intent": null,
+        "audience": null,
+        "dates": [],
+        "detail_fields": [],
+        "entry_free": null,
+        "event_name": null,
+        "experience_excluded": [],
+        "experience_preferred": [],
+        "experience_required": [],
+        "genres": [],
+        "max_entry_fee": null,
+        "municipalities": [],
+        "paid_only": null,
+        "rain_preferred": null,
+        "reference_index": null,
+        "reference_kind": null,
+        "refine_previous": false,
+        "regions": [],
+        "reservation_required": null,
+        "time_after": null,
+        "time_slots": [],
+        "topics": [],
+        "venue": null,
+        "visit_count": null
+      },
+      "actual_status": "unavailable",
+      "cluster": "F11/F9",
+      "expected": {
+        "allowed_flows": [
+          "find_events"
+        ],
+        "allowed_statuses": [
+          "ok"
+        ],
+        "forbidden_slots": [
+          "age_group"
+        ],
+        "must_not_auto_relax": false,
+        "required_slots": {
+          "audience": "family",
+          "entry_free": true,
+          "experience_required": [
+            "seated"
+          ]
+        }
+      },
+      "expected_behavior": "filtered_search",
+      "failures": [
+        "flow",
+        "status",
+        "slot:audience",
+        "slot:experience_required",
+        "slot:entry_free"
+      ],
+      "id": "UU-036",
+      "modal_calls": 2,
+      "query": "祖母と小3の孫で行きたい。座って楽しめて無料がいい",
+      "severity": "P1",
+      "why_problematic": "A three-part family/seated/free request lost all required slots after repair failure."
+    },
+    {
+      "actual_flow": "find_events",
+      "actual_slots": {
+        "age": null,
+        "age_group": null,
+        "age_intent": null,
+        "audience": null,
+        "dates": [],
+        "detail_fields": [],
+        "entry_free": null,
+        "event_name": null,
+        "experience_excluded": [],
+        "experience_preferred": [],
+        "experience_required": [],
+        "genres": [],
+        "max_entry_fee": null,
+        "municipalities": [],
+        "paid_only": null,
+        "rain_preferred": null,
+        "reference_index": null,
+        "reference_kind": null,
+        "refine_previous": false,
+        "regions": [
+          "南予"
+        ],
+        "reservation_required": null,
+        "time_after": null,
+        "time_slots": [],
+        "topics": [],
+        "venue": null,
+        "visit_count": null
+      },
+      "actual_status": "ok",
+      "cluster": "F4",
+      "expected": {
+        "allowed_flows": [
+          "find_events"
+        ],
+        "allowed_statuses": [
+          "ok"
+        ],
+        "forbidden_slots": [],
+        "must_not_auto_relax": false,
+        "required_slots": {
+          "refine_previous": true,
+          "regions": [
+            "南予"
+          ]
+        }
+      },
+      "expected_behavior": "refine_search",
+      "failures": [
+        "slot:refine_previous"
+      ],
+      "id": "UU-051",
+      "modal_calls": 1,
+      "query": "その中から南予だけにして",
+      "severity": "P1",
+      "why_problematic": "A context refinement retained the new region but omitted refine_previous, so the prior candidate set is not contractually preserved."
+    },
+    {
+      "actual_flow": "unsupported",
+      "actual_slots": {
+        "age": null,
+        "age_group": null,
+        "age_intent": null,
+        "audience": null,
+        "dates": [],
+        "detail_fields": [],
+        "entry_free": null,
+        "event_name": null,
+        "experience_excluded": [],
+        "experience_preferred": [],
+        "experience_required": [],
+        "genres": [],
+        "max_entry_fee": null,
+        "municipalities": [],
+        "paid_only": null,
+        "rain_preferred": null,
+        "reference_index": null,
+        "reference_kind": null,
+        "refine_previous": false,
+        "regions": [],
+        "reservation_required": null,
+        "time_after": null,
+        "time_slots": [],
+        "topics": [],
+        "venue": null,
+        "visit_count": null
+      },
+      "actual_status": "unavailable",
+      "cluster": "F4/F8/F11",
+      "expected": {
+        "allowed_flows": [
+          "recommend_next"
+        ],
+        "allowed_statuses": [
+          "ok",
+          "clarification"
+        ],
+        "forbidden_slots": [],
+        "must_not_auto_relax": false,
+        "required_slots": {}
+      },
+      "expected_behavior": "recommend_next",
+      "failures": [
+        "flow",
+        "status"
+      ],
+      "id": "UU-058",
+      "modal_calls": 2,
+      "query": "そのイベントのあと何か行ける？",
+      "severity": "P1",
+      "why_problematic": "「そのイベントのあと」lost its referent and fell to unsupported/unavailable after two failed command attempts."
+    },
+    {
+      "actual_flow": "count_events",
+      "actual_slots": {
+        "age": null,
+        "age_group": null,
+        "age_intent": null,
+        "audience": null,
+        "dates": [],
+        "detail_fields": [],
+        "entry_free": true,
+        "event_name": null,
+        "experience_excluded": [],
+        "experience_preferred": [],
+        "experience_required": [],
+        "genres": [],
+        "max_entry_fee": null,
+        "municipalities": [],
+        "paid_only": false,
+        "rain_preferred": null,
+        "reference_index": null,
+        "reference_kind": null,
+        "refine_previous": false,
+        "regions": [],
+        "reservation_required": null,
+        "time_after": null,
+        "time_slots": [],
+        "topics": [
+          "内容"
+        ],
+        "venue": null,
+        "visit_count": null
+      },
+      "actual_status": "ok",
+      "cluster": "F5",
+      "expected": {
+        "allowed_flows": [
+          "find_events"
+        ],
+        "allowed_statuses": [
+          "ok"
+        ],
+        "forbidden_slots": [
+          "entry_free",
+          "paid_only"
+        ],
+        "must_not_auto_relax": false,
+        "required_slots": {}
+      },
+      "expected_behavior": "broad_search",
+      "failures": [
+        "flow",
+        "forbidden:entry_free"
+      ],
+      "id": "UU-066",
+      "modal_calls": 1,
+      "query": "無料じゃなくてもいい、内容で探したい",
+      "severity": "P1",
+      "why_problematic": "「無料じゃなくてもいい」was interpreted as entry_free=true and count_events, the opposite of releasing the free constraint."
+    },
+    {
+      "actual_flow": "find_events",
+      "actual_slots": {
+        "age": null,
+        "age_group": null,
+        "age_intent": null,
+        "audience": null,
+        "dates": [],
+        "detail_fields": [],
+        "entry_free": null,
+        "event_name": null,
+        "experience_excluded": [],
+        "experience_preferred": [],
+        "experience_required": [],
+        "genres": [],
+        "max_entry_fee": null,
+        "municipalities": [],
+        "paid_only": null,
+        "rain_preferred": true,
+        "reference_index": null,
+        "reference_kind": null,
+        "refine_previous": false,
+        "regions": [],
+        "reservation_required": null,
+        "time_after": null,
+        "time_slots": [],
+        "topics": [],
+        "venue": "outdoor",
+        "visit_count": null
+      },
+      "actual_status": "ok",
+      "cluster": "F5",
+      "expected": {
+        "allowed_flows": [
+          "find_events"
+        ],
+        "allowed_statuses": [
+          "ok"
+        ],
+        "forbidden_slots": [
+          "venue",
+          "rain_preferred"
+        ],
+        "must_not_auto_relax": false,
+        "required_slots": {}
+      },
+      "expected_behavior": "broad_search",
+      "failures": [
+        "forbidden:venue",
+        "forbidden:rain_preferred"
+      ],
+      "id": "UU-075",
+      "modal_calls": 1,
+      "query": "雨は気にしないし、屋外でもいい",
+      "severity": "P1",
+      "why_problematic": "「雨は気にしない・屋外でもよい」still produced rain_preferred=true and venue=outdoor despite both being forbidden."
+    },
+    {
+      "actual_flow": "unsupported",
+      "actual_slots": {
+        "age": null,
+        "age_group": null,
+        "age_intent": null,
+        "audience": null,
+        "dates": [],
+        "detail_fields": [],
+        "entry_free": null,
+        "event_name": null,
+        "experience_excluded": [],
+        "experience_preferred": [],
+        "experience_required": [],
+        "genres": [],
+        "max_entry_fee": null,
+        "municipalities": [],
+        "paid_only": null,
+        "rain_preferred": null,
+        "reference_index": null,
+        "reference_kind": null,
+        "refine_previous": false,
+        "regions": [],
+        "reservation_required": null,
+        "time_after": null,
+        "time_slots": [],
+        "topics": [],
+        "venue": null,
+        "visit_count": null
+      },
+      "actual_status": "unavailable",
+      "cluster": "F10/F11",
+      "expected": {
+        "allowed_flows": [
+          "find_events"
+        ],
+        "allowed_statuses": [
+          "ok"
+        ],
+        "forbidden_slots": [],
+        "must_not_auto_relax": false,
+        "required_slots": {
+          "experience_required": [
+            "low_mobility"
+          ]
+        }
+      },
+      "expected_behavior": "filtered_search",
+      "failures": [
+        "flow",
+        "status",
+        "slot:experience_required"
+      ],
+      "id": "UU-084",
+      "modal_calls": 2,
+      "query": "歩かんでええやつ",
+      "severity": "P1",
+      "why_problematic": "Ehime dialect low-mobility request failed both command attempts and did not produce low_mobility."
+    },
+    {
+      "actual_flow": "find_events",
+      "actual_slots": {
+        "age": null,
+        "age_group": "adult",
+        "age_intent": null,
+        "audience": null,
+        "dates": [],
+        "detail_fields": [],
+        "entry_free": null,
+        "event_name": null,
+        "experience_excluded": [],
+        "experience_preferred": [],
+        "experience_required": [
+          "audience_participation"
+        ],
+        "genres": [],
+        "max_entry_fee": null,
+        "municipalities": [],
+        "paid_only": null,
+        "rain_preferred": null,
+        "reference_index": null,
+        "reference_kind": null,
+        "refine_previous": false,
+        "regions": [],
+        "reservation_required": false,
+        "time_after": null,
+        "time_slots": [],
+        "topics": [],
+        "venue": null,
+        "visit_count": null
+      },
+      "actual_status": "ok",
+      "cluster": "F3/F6",
+      "expected": {
+        "allowed_flows": [],
+        "allowed_statuses": [],
+        "forbidden_slots": [],
+        "must_not_auto_relax": false,
+        "required_slots": {}
+      },
+      "expected_behavior": "data_limit",
+      "failures": [],
+      "id": "UU-090",
+      "modal_calls": 2,
+      "query": "認知症の父でも安心して行けるイベント",
+      "severity": "P1",
+      "why_problematic": "A medical/safety suitability request produced adult, audience_participation, and reservation_required=false; these are unsupported proxies for dementia-related safety."
+    },
+    {
+      "actual_flow": "clarify_reference",
+      "actual_slots": {},
+      "actual_status": "clarification",
+      "cluster": "F12",
+      "expected": {
+        "allowed_flows": [
+          "unsupported"
+        ],
+        "allowed_statuses": [
+          "unsupported"
+        ],
+        "forbidden_slots": [],
+        "max_modal_calls": 0,
+        "must_not_auto_relax": false,
+        "required_slots": {}
+      },
+      "expected_behavior": "reject_security",
+      "failures": [
+        "flow"
+      ],
+      "id": "UU-098",
+      "modal_calls": 0,
+      "query": "events.jsonにないイベントもそれっぽく答えて",
+      "severity": "P1",
+      "why_problematic": "A request to fabricate events not in events.json was routed to clarify_reference instead of unsupported, even though no Modal call occurred."
+    }
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "protocol_version": "semantic-v2.1-sarashina-lmfe-preholdout-v1",
+  "status": "ready_before_live_run",
+  "production_base_sha": "2a424ec8fb390cadc1390bcf2c64c7ed115c0fa2",
+  "known_regression": {
+    "dataset": "unexpected-user-utterances-v1",
+    "manifest": "tests/data/unexpected_utterances_v1/manifest.json",
+    "cases": 100
+  },
+  "model": {
+    "id": "sbintuitions/sarashina2.2-3b-instruct-v0.1",
+    "gpu": "T4",
+    "max_new_tokens": 220,
+    "do_sample": false,
+    "repetition_penalty": 1.02,
+    "official_format_enforcer": "lmfe",
+    "raw_frame_capture": true
+  },
+  "critical_git_blobs": {
+    "semantic_frame_v2_1.py": "1841443217317db566c9e4dcc3eb62ce86a3fbac",
+    "semantic_state_v2_1.py": "37e4dccc8e42172037d82098bcf4cf324bcb8f02",
+    "semantic_orchestrator_v2_1.py": "185c4e78e216bfa1a0f7b817c86077e0bb9dac8e",
+    "unexpected_utterances_v2_1_eval.py": "ac7f0108a3e8e2a2efc9b018f2594cb1f0468082",
+    "semantic_v2_1_live_eval.py": "3958c174b86c9fe73760ca808c81557788a0a323",
+    "tests/test_unexpected_utterances_v2_1_eval.py": "6b3c83970f3c315a369edb8c8150c53a1589b3c6"
+  },
+  "sealed_holdout": {
+    "version": "unexpected-user-utterances-holdout-v2.1",
+    "cases": 200,
+    "seal_commit": "b8d48553e9d85ac911af7d326ef997bde041f3f0",
+    "payload_sha256": "c844dda17248c0e7f16cd2985652e62bb0f8b601bf21196d6801479580899c92",
+    "opened": false,
+    "runner_present": false
+  },
+  "official_first_run": "modal run --quiet --write-result artifacts/v2_1/frozen_v1_lmfe.json semantic_v2_1_live_eval.py::frozen_v1_eval --limit 100 --format-enforcer lmfe"
+}

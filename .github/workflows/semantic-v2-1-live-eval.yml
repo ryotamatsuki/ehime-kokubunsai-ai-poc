@@ -1,0 +1,151 @@
+name: Semantic v2.1 Live Evaluation
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/semantic-operations-v2-1-pre-eval
+
+permissions:
+  contents: read
+
+concurrency:
+  group: semantic-v2-1-live-evaluation
+  cancel-in-progress: false
+
+jobs:
+  live-evaluation:
+    runs-on: ubuntu-latest
+    environment: ehime-kokubunsai-ai-poc
+    timeout-minutes: 120
+    steps:
+      - name: Check out evaluation branch
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install evaluation dependencies
+        run: |
+          python -m pip install --upgrade -r requirements.txt modal fastapi "lm-format-enforcer>=0.10,<1"
+
+      - name: Compile and run evaluator QA
+        run: |
+          python -m compileall -q .
+          PYTHONPATH=. python -m pytest -q tests/test_unexpected_utterances_v2_1_eval.py
+
+      - name: Verify freeze integrity and sealed holdout boundary
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import subprocess
+          from pathlib import Path
+
+          freeze_path = Path("docs/semantic_operations_v2_1_eval_freeze.json")
+          freeze = json.loads(freeze_path.read_text(encoding="utf-8"))
+
+          assert freeze["status"] == "ready_before_live_run"
+          assert freeze["sealed_holdout"]["opened"] is False
+          assert freeze["sealed_holdout"]["runner_present"] is False
+
+          for relative_path, expected_sha in freeze["critical_git_blobs"].items():
+              actual_sha = subprocess.check_output(
+                  ["git", "hash-object", relative_path],
+                  text=True,
+              ).strip()
+              assert actual_sha == expected_sha, (
+                  f"critical blob mismatch: {relative_path}: "
+                  f"{actual_sha} != {expected_sha}"
+              )
+
+          payload_path = (
+              Path("tests/data/unexpected_utterances_holdout_v2_1")
+              / "holdout.json.gz"
+          )
+          actual_payload_sha = hashlib.sha256(payload_path.read_bytes()).hexdigest()
+          expected_payload_sha = freeze["sealed_holdout"]["payload_sha256"]
+          assert actual_payload_sha == expected_payload_sha
+          print("freeze integrity: PASS")
+          print("sealed holdout: opened=false, runner_present=false, payload SHA PASS")
+          PY
+
+      - name: Run official Frozen v1 100-case Live Sarashina + LMFE evaluation
+        env:
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+        run: |
+          mkdir -p artifacts/v2_1
+          modal run --quiet \
+            --write-result artifacts/v2_1/frozen_v1_lmfe.json \
+            semantic_v2_1_live_eval.py::frozen_v1_eval \
+            --limit 100 \
+            --format-enforcer lmfe
+
+      - name: Record run metadata
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          payload = {
+              "repository": os.environ.get("GITHUB_REPOSITORY"),
+              "commit_sha": os.environ.get("GITHUB_SHA"),
+              "ref": os.environ.get("GITHUB_REF"),
+              "workflow": os.environ.get("GITHUB_WORKFLOW"),
+              "run_id": os.environ.get("GITHUB_RUN_ID"),
+              "run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT"),
+              "architecture": "semantic-operations-v2.1",
+              "model": "sbintuitions/sarashina2.2-3b-instruct-v0.1",
+              "format_enforcer": "lmfe",
+              "dataset": "unexpected-user-utterances-v1",
+              "cases": 100,
+              "reference_date": "2028-11-03",
+              "sealed_holdout_opened": False,
+          }
+          out = Path("artifacts/v2_1/run_metadata.json")
+          out.parent.mkdir(parents=True, exist_ok=True)
+          out.write_text(
+              json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Print non-raw evaluation summary
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("artifacts/v2_1/frozen_v1_lmfe.json")
+          if not path.exists():
+              print("live evaluation artifact: unavailable")
+              raise SystemExit(0)
+
+          payload = json.loads(path.read_text(encoding="utf-8"))
+          print(json.dumps({
+              "model": payload.get("model"),
+              "format_enforcer": payload.get("format_enforcer"),
+              "fixture_contract": payload.get("fixture_contract"),
+              "summary": payload.get("summary"),
+              "category_summary": payload.get("category_summary"),
+              "latency_summary": payload.get("latency_summary"),
+              "token_summary": payload.get("token_summary"),
+          }, ensure_ascii=False, sort_keys=True))
+
+          run_metadata = payload.get("run_metadata", {})
+          assert run_metadata.get("sealed_holdout_opened") is False
+          PY
+
+      - name: Upload live evaluation artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: semantic-v2-1-live-eval-${{ github.run_id }}
+          path: artifacts/v2_1/
+          if-no-files-found: warn
