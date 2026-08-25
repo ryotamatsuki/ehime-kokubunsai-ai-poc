@@ -176,6 +176,18 @@ _KANA_REGION_ALIASES: dict[str, str] = {"とうよ": "東予", "ちゅうよ": "
 _LOCATION_SUFFIX = r"(?=(?:市|町|で|の|に|から|だけ|周辺|近く|、|。|,|\s|$))"
 
 
+def _normalize_location_only_context(text: str) -> str:
+    """Normalize `<canonical place>だけで` into parser-known location syntax."""
+
+    aliases: set[str] = set(CANONICAL_REGIONS)
+    for municipality in CANONICAL_MUNICIPALITIES:
+        aliases.add(municipality)
+        aliases.add(municipality.removesuffix("市").removesuffix("町"))
+    for alias in sorted(aliases, key=len, reverse=True):
+        text = re.sub(rf"{re.escape(alias)}だけで", f"{alias}で", text)
+    return text
+
+
 def normalize_query_for_grounding(value: str) -> str:
     text = re.sub(r"\s+", " ", unicodedata.normalize("NFKC", str(value))).strip()
     if not text:
@@ -184,9 +196,10 @@ def normalize_query_for_grounding(value: str) -> str:
         text = re.sub(re.escape(alias) + _LOCATION_SUFFIX, canonical, text)
     for alias, canonical in sorted(_KANA_REGION_ALIASES.items(), key=lambda item: len(item[0]), reverse=True):
         text = re.sub(re.escape(alias) + _LOCATION_SUFFIX, canonical, text)
+    text = _normalize_location_only_context(text)
     # Small compositional orthographic normalizations for stable control
     # vocabulary, rather than complete utterance templates.
-    text = text.replace("よやく", "予約").replace("もうしこみ", "申し込み").replace("もうしこみ", "申し込み")
+    text = text.replace("よやく", "予約").replace("もうしこみ", "申し込み")
     text = text.replace("いらん", "いらない")
     return text
 
