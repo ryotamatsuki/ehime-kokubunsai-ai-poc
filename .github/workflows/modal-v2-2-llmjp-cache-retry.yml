@@ -1,0 +1,30 @@
+name: Accelerated LLM-jp 4 8B cache retry
+
+on:
+  push:
+    branches:
+      - feature/model-selector-llmjp-v22
+    paths:
+      - .github/workflows/modal-v2-2-llmjp-cache-retry.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cache:
+    runs-on: ubuntu-latest
+    environment: ehime-kokubunsai-ai-poc
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/model-selector-llmjp-v22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --upgrade modal 'fastapi[standard]'
+      - name: Download LLM-jp 4 8B Instruct with Xet-enabled image
+        env:
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+        run: modal run semantic_v2_2_multimodel_backend.py::download_llmjp
