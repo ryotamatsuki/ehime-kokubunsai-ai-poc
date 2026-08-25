@@ -22,6 +22,9 @@ def test_each_model_has_an_independent_t4_endpoint_and_volume():
     assert "class LlmJpSemanticV22" in source
     assert source.count('gpu="T4"') == 2
     assert source.count('@modal.fastapi_endpoint(method="POST", requires_proxy_auth=True)') == 2
+    assert source.count("async def semantic(self, body: dict[str, Any]):") == 2
+    assert "await request.json()" not in source
+    assert "from fastapi import Request" not in source
     assert "SARASHINA_VOLUME_NAME = \"ehime-kokubunsai-model-cache\"" in source
     assert "LLMJP_VOLUME_NAME = \"ehime-kokubunsai-llmjp-4-8b-cache\"" in source
     assert 'volumes={"/models": sarashina_volume}' in source
