@@ -16,7 +16,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: semantic-v2-2-multimodel-deploy
+  group: semantic-v2-2-multimodel-deploy-v2
   cancel-in-progress: false
 
 jobs:
@@ -47,12 +47,6 @@ jobs:
             tests/test_semantic_v2_2_multimodel_backend_contract.py \
             tests/test_semantic_v2_2_prompt_verifier.py \
             tests/test_semantic_v2_2.py
-
-      - name: Cache LLM-jp 4 8B Instruct in isolated volume
-        env:
-          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
-          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
-        run: modal run semantic_v2_2_multimodel_backend.py::download_llmjp
 
       - name: Deploy selectable Semantic v2.2 endpoints
         env:
