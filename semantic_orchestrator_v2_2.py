@@ -13,7 +13,10 @@ from dataclasses import dataclass, field
 import time
 from typing import Any, Callable, Mapping
 
+import event_details
+import event_search
 import suitability_clarification
+from command_models import CommandPlan, CommandSlots
 from command_orchestrator import CommandOrchestrator, CommandTurnResult
 from semantic_atomic_v2_2 import AtomicFrameError, AtomicSemanticFrame, build_atomic_frame_payload
 from semantic_capability_v2_1 import evaluate_capability
@@ -23,6 +26,15 @@ from semantic_state_v2_2 import AtomicReduction, fail_soft_reduce, grounded_slot
 
 
 FrameCall = Callable[[Mapping[str, Any]], Any]
+
+
+_RESULT_EVIDENCE_NOUNS = ("条件", "理由", "根拠")
+_RESULT_EVIDENCE_RELATIONS = ("合", "該当", "選")
+_SEARCH_EVIDENCE_NOUNS = ("材料", "基準", "根拠", "理由")
+_SEARCH_EVIDENCE_TARGETS = ("選", "候補", "結果")
+_REFERENCE_PRONOUNS = ("そのイベント", "このイベント", "それ", "これ", "さっきの", "今の")
+_SEQUENCE_MARKERS = ("あと", "後", "次", "続けて")
+_CONTINUATION_MARKERS = ("行け", "行き", "何か", "おすすめ", "ある")
 
 
 @dataclass(frozen=True)
@@ -67,6 +79,26 @@ def _answer(raw: Any) -> str | None:
     return None
 
 
+def _has_pair(value: str, left: tuple[str, ...], right: tuple[str, ...]) -> bool:
+    return any(marker in value for marker in left) and any(marker in value for marker in right)
+
+
+def _looks_like_result_evidence_question(value: str) -> bool:
+    return _has_pair(value, _RESULT_EVIDENCE_NOUNS, _RESULT_EVIDENCE_RELATIONS)
+
+
+def _looks_like_search_evidence_question(value: str) -> bool:
+    return _has_pair(value, _SEARCH_EVIDENCE_NOUNS, _SEARCH_EVIDENCE_TARGETS)
+
+
+def _looks_like_sequence_followup(value: str) -> bool:
+    return (
+        any(marker in value for marker in _REFERENCE_PRONOUNS)
+        and any(marker in value for marker in _SEQUENCE_MARKERS)
+        and any(marker in value for marker in _CONTINUATION_MARKERS)
+    )
+
+
 def generate_atomic_frame(query: str, state: Mapping[str, Any] | None, *, call: FrameCall) -> AtomicFrameGeneration:
     grounded = grounded_slots_from_query_v22(query)
     payload = build_atomic_frame_payload(query, state, grounded)
@@ -87,6 +119,62 @@ def generate_atomic_frame(query: str, state: Mapping[str, Any] | None, *, call: 
 
 class SemanticOperationsOrchestratorV22(SemanticOperationsOrchestratorV21):
     """Parallel v2.2 evaluator; production paths remain untouched."""
+
+    def _deterministic_context_plan(
+        self,
+        query: str,
+        state: Mapping[str, Any] | None,
+    ) -> tuple[str, CommandPlan | None, str | None, bool]:
+        """Complete the finite state/reference layer removed from the model.
+
+        v2.2 deliberately removed detail/reference/explanation/next acts from
+        the atomic classifier. Those acts therefore must be resolved from
+        trusted conversation state before generic refinement routing. The
+        rules below are relational grammars, not per-fixture utterance maps.
+        """
+
+        last_results, selected_event = self._context_events(state)
+        normalized = event_search.normalize_query(query).replace(" ", "")
+        reference_index = event_search.resolve_reference_index(query, len(last_results)) if last_results else None
+
+        # A question about why a particular ordinal result matched the search
+        # is result-evidence recovery, not a new refinement search.
+        if reference_index is not None and _looks_like_result_evidence_question(normalized):
+            slots = CommandSlots.from_dict({
+                "reference_kind": "ordinal",
+                "reference_index": reference_index + 1,
+            })
+            return "explain_result_atomic", CommandPlan("explain_result", slots, confidence="high"), None, False
+
+        # Explicit ordinal + factual detail outranks lexical refinement markers
+        # such as "だけ" (e.g. asking only for the place of the third result).
+        detail_field = event_details.detect_detail_field(query)
+        if reference_index is not None and detail_field is not None:
+            slots = CommandSlots.from_dict({
+                "reference_kind": "ordinal",
+                "reference_index": reference_index + 1,
+                "detail_fields": [detail_field],
+            })
+            return "ordinal_detail_atomic", CommandPlan("event_detail", slots, confidence="high"), None, False
+
+        # Search-level evidence questions talk about the result set/candidates
+        # as a whole and require no model generation.
+        if last_results and reference_index is None and _looks_like_search_evidence_question(normalized):
+            return "explain_search_atomic", CommandPlan("explain_search", CommandSlots(), confidence="high"), None, False
+
+        # Temporal continuation from a referenced event is a finite relation.
+        # If the UI state has no unique selected event, keep the flow semantic
+        # but ask which event is meant rather than inventing a seed.
+        if last_results and _looks_like_sequence_followup(normalized):
+            if selected_event is not None or (isinstance(state, Mapping) and state.get("selected_event_id")):
+                slots = CommandSlots.from_dict({"reference_kind": "selected"})
+                return "recommend_next_atomic", CommandPlan("recommend_next", slots, confidence="high"), None, False
+            if len(last_results) == 1:
+                slots = CommandSlots.from_dict({"reference_kind": "last_result", "reference_index": 1})
+                return "recommend_next_atomic", CommandPlan("recommend_next", slots, confidence="high"), None, False
+            return "recommend_next_ambiguous", None, "どのイベントの後に行く候補か、番号かイベント名で教えてみて。", False
+
+        return super()._deterministic_context_plan(query, state)
 
     def _execute_v22_plan(self, query: str, state: Mapping[str, Any] | None, reduction: AtomicReduction, route: str, started: float, *, frame: AtomicSemanticFrame | None, generation: AtomicFrameGeneration | None = None) -> SemanticV22Result:
         assert reduction.plan is not None
@@ -189,6 +277,12 @@ class SemanticOperationsOrchestratorV22(SemanticOperationsOrchestratorV21):
 
         route_name, trusted_plan, immediate_message, previous_scope = self._deterministic_context_plan(value, state)
         if immediate_message is not None:
+            if route_name == "recommend_next_ambiguous":
+                return SemanticV22Result(
+                    "clarification", "recommend_next", message=immediate_message,
+                    deterministic_route=route_name,
+                    latency_ms=(time.perf_counter() - started) * 1000,
+                )
             status = "clarification" if route_name == "clarify_reference" else "unsupported"
             return SemanticV22Result(
                 status, "unsupported", message=immediate_message,
