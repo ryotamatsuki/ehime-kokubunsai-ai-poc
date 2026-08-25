@@ -38,22 +38,51 @@ jobs:
           print('LMFE atomic schema: PASS')
           PY
       - name: Run v2.1 frozen-v1 oracle ceiling
-        run: PYTHONPATH=. python semantic_oracle_ceiling_v2_1.py
+        run: |
+          PYTHONPATH=. python - <<'PY'
+          from semantic_oracle_ceiling_v2_1 import evaluate_oracle_v21
+          result = evaluate_oracle_v21()
+          assert result['cases'] == 100
+          assert result['machine_pass'] == 100, result['failed']
+          print('v2.1 oracle: 100/100 PASS')
+          PY
       - name: Run v2.2 frozen-v1 oracle ceiling
-        run: PYTHONPATH=. python semantic_oracle_ceiling_v2_2.py
+        run: |
+          PYTHONPATH=. python - <<'PY'
+          from semantic_oracle_ceiling_v2_2 import evaluate_oracle_v22
+          result = evaluate_oracle_v22()
+          assert result['cases'] == 100
+          assert result['machine_pass'] == 100, result['failed']
+          print('v2.2 oracle: 100/100 PASS')
+          PY
       - name: Verify v2.2 source cannot open sealed holdout
         run: |
           python - <<'PY'
           from pathlib import Path
-          for path in (
+          paths = (
               'semantic_atomic_v2_2.py',
+              'semantic_prompt_v2_2.py',
+              'semantic_verifier_v2_2.py',
               'semantic_state_v2_2.py',
               'semantic_orchestrator_v2_2.py',
               'semantic_oracle_ceiling_v2_2.py',
-          ):
+              'unexpected_utterances_v2_2_eval.py',
+              'semantic_v2_2_live_eval.py',
+              'tests/test_semantic_v2_2.py',
+              'tests/test_semantic_v2_2_prompt_verifier.py',
+          )
+          forbidden = (
+              'tests/data/unexpected_utterances_holdout_v2_1',
+              'payload.json.gz',
+          )
+          for path in paths:
               source = Path(path).read_text(encoding='utf-8')
-              assert 'tests/data/unexpected_utterances_holdout_v2_1' not in source
-              assert 'payload.json.gz' not in source
+              for marker in forbidden:
+                  assert marker not in source, (path, marker)
+          live = Path('semantic_v2_2_live_eval.py').read_text(encoding='utf-8')
+          assert '@modal.fastapi_endpoint' not in live
+          assert '@modal.web_endpoint' not in live
+          assert 'def frozen_v1_eval(' in live
           print('sealed-holdout execution boundary: PASS')
           PY
       - name: Verify sealed holdout remains opaque
