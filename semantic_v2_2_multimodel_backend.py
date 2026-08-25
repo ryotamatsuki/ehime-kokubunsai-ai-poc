@@ -273,8 +273,7 @@ class SarashinaSemanticV22(_SemanticEndpointMixin):
         return self._run(query, state, grounded, format_enforcer)
 
     @modal.fastapi_endpoint(method="POST", requires_proxy_auth=True)
-    async def semantic(self, request: Any):
-        body = await request.json()
+    async def semantic(self, body: dict[str, Any]):
         return self._run(
             str(body.get("query", "")),
             body.get("state"),
@@ -304,8 +303,7 @@ class LlmJpSemanticV22(_SemanticEndpointMixin):
         return self._run(query, state, grounded, format_enforcer)
 
     @modal.fastapi_endpoint(method="POST", requires_proxy_auth=True)
-    async def semantic(self, request: Any):
-        body = await request.json()
+    async def semantic(self, body: dict[str, Any]):
         return self._run(
             str(body.get("query", "")),
             body.get("state"),
