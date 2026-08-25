@@ -795,7 +795,7 @@ def _call_new_command(
         configured_by_key = {spec.key: spec for spec in configured_models}
         selected_key = str(st.session_state.get("semantic_model_key") or "")
         selected_model = configured_by_key.get(selected_key) or configured_models[0]
-        endpoint_url = _optional_secret(selected_model.modal_url_secret)
+        endpoint_url = semantic_model_registry.resolve_model_url(selected_model, st.secrets)
         if endpoint_url is None:
             return _CommandOutcome(
                 flow="unsupported",
