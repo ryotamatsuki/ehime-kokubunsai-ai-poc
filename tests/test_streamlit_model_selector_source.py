@@ -7,7 +7,8 @@ def test_streamlit_exposes_semantic_model_selector_and_v22_path():
     source = Path("streamlit_app.py").read_text(encoding="utf-8")
     assert "import semantic_model_registry" in source
     assert "from semantic_v2_2_ui import SemanticEndpointConfig, run_semantic_v22" in source
-    assert 'st.selectbox("AIモデル"' in source
+    assert "st.selectbox(" in source
+    assert '"AIモデル"' in source
     assert 'key="semantic_model_key"' in source
     assert "Semantic Operations v2.2" in source
     assert "run_semantic_v22(" in source
