@@ -66,7 +66,7 @@ base_image = (
 
 download_image = (
     modal.Image.debian_slim(python_version="3.11")
-    .pip_install("huggingface_hub")
+    .pip_install("huggingface_hub[hf_xet]")
     .add_local_python_source("semantic_model_registry")
 )
 
