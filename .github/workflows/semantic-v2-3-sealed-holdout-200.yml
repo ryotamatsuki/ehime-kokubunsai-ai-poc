@@ -1,0 +1,113 @@
+name: Semantic v2.3 Final Sealed Holdout 200
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: semantic-v2-3-sealed-holdout-200
+  cancel-in-progress: false
+
+jobs:
+  final-sealed-holdout:
+    runs-on: ubuntu-latest
+    environment: ehime-kokubunsai-ai-poc
+    timeout-minutes: 240
+    steps:
+      - name: Check out evaluation branch
+        uses: actions/checkout@v4
+        with:
+          ref: eval/semantic-v2-3-sealed-holdout-200
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install evaluation dependencies
+        run: python -m pip install --upgrade -r requirements.txt modal fastapi "lm-format-enforcer>=0.10,<1"
+
+      - name: Run all pre-open deterministic gates
+        run: |
+          python -m compileall -q .
+          python tests/run_search_v2_qa.py
+          python tests/run_conversation_router_qa.py
+          python tests/run_conversational_recovery_qa.py
+          python tests/run_recovery_v2_qa.py
+          python tests/run_participation_qa.py
+          python tests/run_recommendation_qa.py
+          python tests/run_pending_recommendation_qa.py
+          python tests/run_agentic_search_qa.py
+          python tests/run_command_semantic_qa.py
+          python tests/run_security_qa.py
+          python tests/run_recovery_benchmark.py
+          PYTHONPATH=. python -m pytest -q
+          PYTHONPATH=. python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+          from semantic_freeze_v2_3 import validate_freeze_manifest
+          manifest = json.loads(Path("docs/semantic_operations_v2_3_eval_freeze.json").read_text(encoding="utf-8"))
+          validate_freeze_manifest(manifest)
+          from lmformatenforcer import JsonSchemaParser
+          from semantic_atomic_v2_3 import ATOMIC_FRAME_JSON_SCHEMA_V23
+          JsonSchemaParser(ATOMIC_FRAME_JSON_SCHEMA_V23)
+          assert ATOMIC_FRAME_JSON_SCHEMA_V23["additionalProperties"] is False
+          from semantic_oracle_ceiling_v2_2 import evaluate_oracle_v22
+          assert evaluate_oracle_v22()["machine_pass"] == 100
+          from semantic_oracle_ceiling_v2_3 import evaluate_oracle_v23
+          assert evaluate_oracle_v23()["machine_pass"] == 100
+          root = Path("tests/data/unexpected_utterances_holdout_v2_1")
+          holdout_manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+          digest = hashlib.sha256((root / holdout_manifest["payload"]).read_bytes()).hexdigest()
+          assert digest == holdout_manifest["payload_sha256"] == "c844dda17248c0e7f16cd2985652e62bb0f8b601bf21196d6801479580899c92"
+          assert holdout_manifest["total_cases"] == 200
+          print("v2.3 freeze manifest: PASS")
+          print("LMFE/oracle/opaque holdout gates: PASS")
+          PY
+
+      - name: Deploy isolated v2.3 evaluation backend
+        env:
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+        run: modal deploy semantic_v2_3_multimodel_backend.py
+
+      - name: Run pre-open isolated Sarashina smoke
+        env:
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+        run: |
+          mkdir -p artifacts/semantic-v2-3-sealed-holdout-200-${{ github.run_id }}
+          PYTHONPATH=. python sealed_holdout_v2_1_eval.py \
+            --mode smoke \
+            --output-dir artifacts/semantic-v2-3-sealed-holdout-200-${{ github.run_id }}
+
+      - name: Open and execute the holdout exactly once
+        env:
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+        run: |
+          PYTHONPATH=. python sealed_holdout_v2_1_eval.py \
+            --mode evaluate \
+            --confirm-consume \
+            --output-dir artifacts/semantic-v2-3-sealed-holdout-200-${{ github.run_id }}
+
+      - name: Upload non-raw evaluation artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: semantic-v2-3-sealed-holdout-200-summary-${{ github.run_id }}
+          if-no-files-found: warn
+          path: |
+            artifacts/semantic-v2-3-sealed-holdout-200-${{ github.run_id }}/manifest.json
+            artifacts/semantic-v2-3-sealed-holdout-200-${{ github.run_id }}/environment.json
+            artifacts/semantic-v2-3-sealed-holdout-200-${{ github.run_id }}/smoke.json
+            artifacts/semantic-v2-3-sealed-holdout-200-${{ github.run_id }}/summary.json
+            artifacts/semantic-v2-3-sealed-holdout-200-${{ github.run_id }}/category_results.csv
+            artifacts/semantic-v2-3-sealed-holdout-200-${{ github.run_id }}/evidence_boundary_metrics.json
+            artifacts/semantic-v2-3-sealed-holdout-200-${{ github.run_id }}/failure_clusters.json
+            artifacts/semantic-v2-3-sealed-holdout-200-${{ github.run_id }}/latency_tokens.json
+            artifacts/semantic-v2-3-sealed-holdout-200-${{ github.run_id }}/manual_review.json
+            artifacts/semantic-v2-3-sealed-holdout-200-${{ github.run_id }}/REPORT.md
