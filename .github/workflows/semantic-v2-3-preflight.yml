@@ -54,6 +54,16 @@ jobs:
           assert 'clarification' not in ATOMIC_FRAME_JSON_SCHEMA_V23['properties']
           print('LMFE v2.3 closed schema: PASS')
           PY
+      - name: Benchmark deterministic v2.3 evidence layers
+        run: |
+          PYTHONPATH=. python - <<'PY'
+          import json
+          from semantic_performance_v2_3 import benchmark_deterministic_layers
+          result = benchmark_deterministic_layers(3000)
+          print(json.dumps(result, sort_keys=True))
+          assert result['capability_registry']['p95_ms'] < 5.0, result
+          assert result['evidence_verifier']['p95_ms'] < 20.0, result
+          PY
       - name: Run v2.2 regression oracle ceiling
         run: |
           PYTHONPATH=. python - <<'PY'
@@ -97,6 +107,7 @@ jobs:
               'semantic_evidence_v2_3.py',
               'semantic_capability_registry_v2_3.py',
               'semantic_atomic_v2_3.py',
+              'semantic_grounding_v2_3.py',
               'semantic_prompt_v2_3.py',
               'semantic_verifier_v2_3.py',
               'semantic_state_v2_3.py',
@@ -104,6 +115,7 @@ jobs:
               'semantic_oracle_ceiling_v2_3.py',
               'unexpected_utterances_v2_3_eval.py',
               'semantic_v2_3_multimodel_backend.py',
+              'semantic_performance_v2_3.py',
           )
           forbidden = (
               'unexpected_utterances_holdout_v2_1',
