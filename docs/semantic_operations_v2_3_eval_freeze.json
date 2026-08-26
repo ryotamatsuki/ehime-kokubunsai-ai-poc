@@ -1,0 +1,47 @@
+{
+  "architecture_version": "semantic-operations-v2.3-evidence-bounded",
+  "capability_registry_hash": "a8c242a62ebe2ca6765587b77de37b89c3033566c671d380635e2f2df06578d2",
+  "decoding": {
+    "do_sample": false,
+    "max_new_tokens": 220,
+    "repetition_penalty": 1.02
+  },
+  "evaluator_hash": "4721dcdebf6fa1c72faea0d112d6eca8f604b7a15e490aca8cd862fcf0007e35",
+  "few_shot_count": 7,
+  "grounding_hash": "c33d244f540f4fa65058628f7b4aa2de4125389aa9f10e1c8e5cc4768535e22e",
+  "hash_algorithm": "sha256",
+  "lmfe": {
+    "enabled": true,
+    "package_constraint": "lm-format-enforcer>=0.10,<1",
+    "schema": "ATOMIC_FRAME_JSON_SCHEMA_V23"
+  },
+  "max_model_calls": 1,
+  "model_registry_hash": "eb661cdff0ac30513b083e544af4e059a14b1f0c00ca5d7827f504ea15fc1ae3",
+  "models": [
+    {
+      "key": "sarashina-2.2-3b",
+      "model_id": "sbintuitions/sarashina2.2-3b-instruct-v0.1"
+    },
+    {
+      "key": "llm-jp-4-8b",
+      "model_id": "llm-jp/llm-jp-4-8b-instruct"
+    }
+  ],
+  "multimodel_backend_hash": "a72caf2bd6c677ea56c2be946d911449d39ded78d12a03c03ab36613d0414e64",
+  "oracle_hash": "079881f5374b5c321ec29c2c0d26471007beec88febf59db91890e74eb4fd5d6",
+  "orchestrator_hash": "12b3153acc6f5306f37027e4064333ae43c289782dd5d0f97ddf09d1d3b2c976",
+  "production": {
+    "deployed": false,
+    "main_modified": false
+  },
+  "prompt_hash": "c188cb3a344ce8d72bfc478782399254bbdc11c0ffdef63d0eebf8188c7933ae",
+  "repair_generation": false,
+  "schema_hash": "618d03241f0a01fbe9e8569359eb677eda822d7e1a523ebc095d32e7fa7e073c",
+  "sealed_holdout": {
+    "executed": false,
+    "opened": false,
+    "sha256": "c844dda17248c0e7f16cd2985652e62bb0f8b601bf21196d6801479580899c92"
+  },
+  "state_reducer_hash": "8941fdd1469e7901f55734b7dfa2bebb865ea8ed628b90a50c75d3feb991e02a",
+  "verifier_hash": "b6435a0084d3b93b89013349a6fcc23a5be97af801655c62d07d52861f6fbedc"
+}
