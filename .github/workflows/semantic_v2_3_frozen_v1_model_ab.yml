@@ -236,9 +236,9 @@ jobs:
           from pathlib import Path
 
           log = Path("artifacts/semantic-v2-3-frozen-v1-ab/modal_deploy.log").read_text(encoding="utf-8", errors="replace")
-          log = re.sub(r"\\x1b\\[[0-9;]*m", "", log)
+          log = re.sub(r"\x1b\[[0-9;]*m", "", log)
           urls = []
-          for value in re.findall(r"https://[^\\s`<>\"']+\\.modal\\.run", log):
+          for value in re.findall(r"https://[^\s`<>\"']+\.modal\.run", log):
               value = value.rstrip(".,)")
               if value not in urls:
                   urls.append(value)
@@ -251,11 +251,11 @@ jobs:
               "llm-jp-4-8b": llmjp[0],
           }
           Path("artifacts/semantic-v2-3-frozen-v1-ab/modal_endpoints.json").write_text(
-              json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True) + "\\n", encoding="utf-8"
+              json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8"
           )
           with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as handle:
-              handle.write(f"SEMANTIC_V23_URL_SARASHINA_2_2_3B={sarashina[0]}\\n")
-              handle.write(f"SEMANTIC_V23_URL_LLM_JP_4_8B={llmjp[0]}\\n")
+              handle.write(f"SEMANTIC_V23_URL_SARASHINA_2_2_3B={sarashina[0]}\n")
+              handle.write(f"SEMANTIC_V23_URL_LLM_JP_4_8B={llmjp[0]}\n")
           print(json.dumps(result, ensure_ascii=False, sort_keys=True))
           PY
 
