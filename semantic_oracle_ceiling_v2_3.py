@@ -2,7 +2,8 @@
 
 This module never imports or opens the sealed 200-case holdout.  It translates
 the existing specification-authored v2.2 oracle meaning into the v2.3 closed
-EvidenceRequest contract and sends it through the real verifier/state machine.
+EvidenceRequest + SemanticResolution contract and sends it through the real
+verifier/state machine.  It does not modify fixture expectations.
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ import json
 from typing import Any, Mapping
 
 from semantic_atomic_v2_3 import ATOMIC_INTENT_VALUES_V23, AtomicSemanticFrameV23
-from semantic_evidence_v2_3 import EvidenceRequest
+from semantic_evidence_v2_3 import EvidenceRequest, SemanticResolution
 from semantic_oracle_ceiling_v2_2 import oracle_atomic_frame
 from semantic_orchestrator_v2_3 import SemanticOperationsOrchestratorV23
 from unexpected_utterances_eval import _forbidden_present, _seed_state, _slot_subset, load_dataset
@@ -51,11 +52,17 @@ def oracle_atomic_frame_v23(case: Mapping[str, Any]) -> AtomicSemanticFrameV23:
         ) or any(value != "none" for value in old.experience.values())
         evidence = EvidenceRequest.SUPPORTED_ATTRIBUTE if has_supported_atom else EvidenceRequest.NONE
 
+    resolution = (
+        SemanticResolution.AMBIGUOUS
+        if old.clarification != "none"
+        else SemanticResolution.RESOLVED
+    )
     intent = old.intent if old.intent in ATOMIC_INTENT_VALUES_V23 else "search"
     return AtomicSemanticFrameV23(
         intent=intent,
         scope=old.scope,
         evidence_request=evidence.value,
+        semantic_resolution=resolution.value,
         municipality=old.municipality,
         region=old.region,
         fee=old.fee,
@@ -115,7 +122,9 @@ def evaluate_oracle_v23(dataset: Mapping[str, Any] | None = None) -> dict[str, A
             "route": result.deterministic_route,
             "frame_fallback": result.frame_fallback,
             "evidence_request": result.evidence_request,
+            "semantic_resolution": result.semantic_resolution,
             "rejected_atoms": list(result.rejected_atoms),
+            "grounding_proofs": list(result.grounding_proofs),
         })
 
     categories = Counter(str(row["category"]) for row in rows)
@@ -134,7 +143,10 @@ def evaluate_oracle_v23(dataset: Mapping[str, Any] | None = None) -> dict[str, A
             {
                 "id": row["id"], "failures": row["failures"], "route": row["route"],
                 "flow": row["flow"], "status": row["status"], "slots": row["slots"],
-                "evidence_request": row["evidence_request"], "rejected_atoms": row["rejected_atoms"],
+                "evidence_request": row["evidence_request"],
+                "semantic_resolution": row["semantic_resolution"],
+                "rejected_atoms": row["rejected_atoms"],
+                "grounding_proofs": row["grounding_proofs"],
             }
             for row in rows if not row["pass"]
         ],
