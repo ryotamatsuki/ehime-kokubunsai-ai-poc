@@ -1,0 +1,13 @@
+{
+  "architecture_frozen_sha": "b2ba866d1f4879bef866be9e9b19fc653fbe5d31",
+  "github_run_attempt": "1",
+  "github_run_id": "32918096539",
+  "github_sha": "9fcafe1cc51012d6f802fabc3474e4951ec5fb9f",
+  "holdout_opened": false,
+  "holdout_payload_sha256": "c844dda17248c0e7f16cd2985652e62bb0f8b601bf21196d6801479580899c92",
+  "modal_endpoint_urls": {
+    "llm-jp-4-8b": "https://ryota-matsuki--ehime-kokubunsai-semantic-v2-2-api-llmjps-0cb1b6.modal.run",
+    "sarashina-2.2-3b": "https://ryota-matsuki--ehime-kokubunsai-semantic-v2-2-api-sarash-52fee3.modal.run"
+  },
+  "python": "3.11.16 (main, Aug 13 2026, 02:46:14) [GCC 13.3.0]"
+}

@@ -1,0 +1,31 @@
+{
+  "llm-jp-4-8b": {
+    "application_semantic_failure": 3,
+    "empty_output": 17,
+    "experience_prefer_error": 1,
+    "experience_require_error": 4,
+    "fee_error": 3,
+    "flow_status_mismatch": 15,
+    "municipality_error": 1,
+    "rain_error": 1,
+    "region_error": 1,
+    "reservation_error": 1,
+    "scope_error": 1,
+    "venue_error": 2
+  },
+  "sarashina-2.2-3b": {
+    "application_semantic_failure": 3,
+    "audience_error": 1,
+    "empty_output": 17,
+    "experience_prefer_error": 2,
+    "experience_require_error": 7,
+    "fail_soft_overuse": 1,
+    "fail_soft_underuse": 1,
+    "fee_error": 1,
+    "flow_status_mismatch": 18,
+    "rain_error": 2,
+    "reservation_error": 5,
+    "schema_invalid": 2,
+    "scope_error": 1
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "finished": "2026-08-26T01:40:23.024658Z",
+  "formal_cases": 100,
+  "holdout_opened": false,
+  "holdout_run": false,
+  "model_conditions": 200,
+  "started": "2026-08-26T01:15:05.802664Z",
+  "valid": true
+}

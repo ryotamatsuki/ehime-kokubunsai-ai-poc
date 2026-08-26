@@ -1,0 +1,38 @@
+{
+  "llm-jp-4-8b": {
+    "atomic_schema_valid": true,
+    "cache_verified_via_successful_model_load": true,
+    "client_elapsed_ms": 71205.87,
+    "container_setup_ms": 31560.408,
+    "endpoint_url": "https://ryota-matsuki--ehime-kokubunsai-semantic-v2-2-api-llmjps-0cb1b6.modal.run",
+    "excluded_from_score": true,
+    "generated_tokens": 103,
+    "http_success": true,
+    "json_parse_success": true,
+    "lmfe": true,
+    "model_id": "llm-jp/llm-jp-4-8b-instruct",
+    "model_key": "llm-jp-4-8b",
+    "model_load_ms": 22468.074,
+    "non_empty_answer": true,
+    "prompt_tokens": 1328,
+    "server_inference_ms": 11333.969
+  },
+  "sarashina-2.2-3b": {
+    "atomic_schema_valid": true,
+    "cache_verified_via_successful_model_load": true,
+    "client_elapsed_ms": 47316.633,
+    "container_setup_ms": 17052.304,
+    "endpoint_url": "https://ryota-matsuki--ehime-kokubunsai-semantic-v2-2-api-sarash-52fee3.modal.run",
+    "excluded_from_score": true,
+    "generated_tokens": 113,
+    "http_success": true,
+    "json_parse_success": true,
+    "lmfe": true,
+    "model_id": "sbintuitions/sarashina2.2-3b-instruct-v0.1",
+    "model_key": "sarashina-2.2-3b",
+    "model_load_ms": 11664.571,
+    "non_empty_answer": true,
+    "prompt_tokens": 1202,
+    "server_inference_ms": 10815.666
+  }
+}

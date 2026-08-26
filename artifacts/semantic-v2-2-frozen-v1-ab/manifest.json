@@ -1,0 +1,118 @@
+{
+  "architecture_frozen_sha": "b2ba866d1f4879bef866be9e9b19fc653fbe5d31",
+  "atomic_schema_module_sha256": "ea79322aea8097b291867256f9da87dbdb95c189ec8a6687efdaaab49c207f63",
+  "end_timestamp": "2026-08-26T01:40:23.024658Z",
+  "evaluation_branch": "eval/semantic-v2-2-frozen-v1-model-ab",
+  "fixture_contract": {
+    "automatic_only_cases": 67,
+    "cases": 100,
+    "category_counts": {
+      "ambiguous_suitability": 20,
+      "colloquial_typo_dialect": 10,
+      "compound_constraints": 15,
+      "context_followup": 15,
+      "data_gap_boundary": 10,
+      "negation_priority": 10,
+      "security_scope": 5,
+      "underspecified": 15
+    },
+    "frozen_against_main_sha": "2a424ec8fb390cadc1390bcf2c64c7ed115c0fa2",
+    "manual_review_cases": 33,
+    "version": "unexpected-user-utterances-v1"
+  },
+  "frozen_v1_cases": 100,
+  "frozen_v1_corpus_sha256": "2b11af35e07469a7244c0413abbee948daf04cedc25eebabe12cb0c9cf317efe",
+  "frozen_v1_version": "unexpected-user-utterances-v1",
+  "generation_settings": {
+    "do_sample": false,
+    "format_enforcer": "lmfe",
+    "max_new_tokens": 220,
+    "model_calls_per_residual_turn_max": 1,
+    "repair_generation": false,
+    "repetition_penalty": 1.02
+  },
+  "holdout_opened": false,
+  "holdout_payload_sha256": "c844dda17248c0e7f16cd2985652e62bb0f8b601bf21196d6801479580899c92",
+  "holdout_run": false,
+  "modal_endpoint_identifiers": {
+    "llm-jp-4-8b": {
+      "model_id": "llm-jp/llm-jp-4-8b-instruct",
+      "model_key": "llm-jp-4-8b",
+      "url": "https://ryota-matsuki--ehime-kokubunsai-semantic-v2-2-api-llmjps-0cb1b6.modal.run"
+    },
+    "sarashina-2.2-3b": {
+      "model_id": "sbintuitions/sarashina2.2-3b-instruct-v0.1",
+      "model_key": "sarashina-2.2-3b",
+      "url": "https://ryota-matsuki--ehime-kokubunsai-semantic-v2-2-api-sarash-52fee3.modal.run"
+    }
+  },
+  "model_ids": {
+    "llm-jp-4-8b": "llm-jp/llm-jp-4-8b-instruct",
+    "sarashina-2.2-3b": "sbintuitions/sarashina2.2-3b-instruct-v0.1"
+  },
+  "model_keys": [
+    "sarashina-2.2-3b",
+    "llm-jp-4-8b"
+  ],
+  "orchestrator_sha256": "bcf62a81a8a35cd4339213cb0afb39b47accf93bedaf1f72d48bd347df735d0b",
+  "order_policy": "odd_case_sarashina_then_llmjp; even_case_llmjp_then_sarashina",
+  "production_deployed": false,
+  "production_main_modified": false,
+  "prompt_contract": {
+    "same_few_shot": true,
+    "same_lmfe": true,
+    "same_prompt": true,
+    "same_schema": true,
+    "same_verifier_reducer_executor": true
+  },
+  "prompt_sha256": "d923a089412d5894dc47fde8a6217f772f97406e0bef394d9ba2234ab1fe2a41",
+  "reducer_sha256": "5178f11743bc5f7d2d1523e6b1b6dda595d88877e0b81b641cc4ee34f0380824",
+  "repository": "ryotamatsuki/ehime-kokubunsai-ai-poc",
+  "retry_policy": {
+    "modal_redirect_hops_max": 4,
+    "one_request_per_model_called_case": true,
+    "semantic_quality_retry": false,
+    "transport_retry": false
+  },
+  "schema_sha256": "f853d84a897aab3a775db17c44faffa8c9c6eda50fc2633036380f836cbbdd76",
+  "smoke": {
+    "llm-jp-4-8b": {
+      "atomic_schema_valid": true,
+      "cache_verified_via_successful_model_load": true,
+      "client_elapsed_ms": 71205.87,
+      "container_setup_ms": 31560.408,
+      "endpoint_url": "https://ryota-matsuki--ehime-kokubunsai-semantic-v2-2-api-llmjps-0cb1b6.modal.run",
+      "excluded_from_score": true,
+      "generated_tokens": 103,
+      "http_success": true,
+      "json_parse_success": true,
+      "lmfe": true,
+      "model_id": "llm-jp/llm-jp-4-8b-instruct",
+      "model_key": "llm-jp-4-8b",
+      "model_load_ms": 22468.074,
+      "non_empty_answer": true,
+      "prompt_tokens": 1328,
+      "server_inference_ms": 11333.969
+    },
+    "sarashina-2.2-3b": {
+      "atomic_schema_valid": true,
+      "cache_verified_via_successful_model_load": true,
+      "client_elapsed_ms": 47316.633,
+      "container_setup_ms": 17052.304,
+      "endpoint_url": "https://ryota-matsuki--ehime-kokubunsai-semantic-v2-2-api-sarash-52fee3.modal.run",
+      "excluded_from_score": true,
+      "generated_tokens": 113,
+      "http_success": true,
+      "json_parse_success": true,
+      "lmfe": true,
+      "model_id": "sbintuitions/sarashina2.2-3b-instruct-v0.1",
+      "model_key": "sarashina-2.2-3b",
+      "model_load_ms": 11664.571,
+      "non_empty_answer": true,
+      "prompt_tokens": 1202,
+      "server_inference_ms": 10815.666
+    }
+  },
+  "start_timestamp": "2026-08-26T01:15:05.802664Z",
+  "verifier_sha256": "2176d838f692886165efe0a463b00fca82f6db355279564fc652471ab4509780"
+}

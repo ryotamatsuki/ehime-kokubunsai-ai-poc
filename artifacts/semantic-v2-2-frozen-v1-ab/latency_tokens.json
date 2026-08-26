@@ -1,0 +1,118 @@
+{
+  "llm-jp-4-8b": {
+    "latency": {
+      "client_request_ms": {
+        "max": 16350.414,
+        "mean": 10778.54,
+        "median": 9028.64,
+        "min": 8563.723,
+        "p90": 14189.384,
+        "p95": 14274.906
+      },
+      "first_model_call_generation_ms": {
+        "max": 8697.977,
+        "mean": 8697.977,
+        "median": 8697.977,
+        "min": 8697.977,
+        "p90": 8697.977,
+        "p95": 8697.977
+      },
+      "model_inference_generation_ms": {
+        "max": 14067.039,
+        "mean": 10449.912,
+        "median": 8742.337,
+        "min": 8279.753,
+        "p90": 13878.758,
+        "p95": 13935.809
+      },
+      "reported_container_setup_ms": {
+        "max": 31560.408,
+        "mean": 31560.408,
+        "median": 31560.408,
+        "min": 31560.408,
+        "p90": 31560.408,
+        "p95": 31560.408
+      },
+      "server_total_ms": {
+        "max": 14072.778,
+        "mean": 10455.695,
+        "median": 8747.994,
+        "min": 8285.189,
+        "p90": 13884.427,
+        "p95": 13943.049
+      },
+      "subsequent_model_call_generation_ms": {
+        "max": 14067.039,
+        "mean": 10471.277,
+        "median": 8760.014,
+        "min": 8279.753,
+        "p90": 13878.975,
+        "p95": 13936.079
+      }
+    },
+    "tokens": {
+      "mean_generated_tokens_per_model_call": 128.157,
+      "mean_prompt_tokens_per_model_call": 1336.651,
+      "total_generated_tokens": 10637,
+      "total_prompt_tokens": 110942
+    }
+  },
+  "sarashina-2.2-3b": {
+    "latency": {
+      "client_request_ms": {
+        "max": 42128.879,
+        "mean": 7478.741,
+        "median": 6956.589,
+        "min": 6171.567,
+        "p90": 7511.275,
+        "p95": 8409.339
+      },
+      "first_model_call_generation_ms": {
+        "max": 9531.13,
+        "mean": 9531.13,
+        "median": 9531.13,
+        "min": 9531.13,
+        "p90": 9531.13,
+        "p95": 9531.13
+      },
+      "model_inference_generation_ms": {
+        "max": 10425.168,
+        "mean": 6741.396,
+        "median": 6688.112,
+        "min": 5908.298,
+        "p90": 7038.398,
+        "p95": 7796.864
+      },
+      "reported_container_setup_ms": {
+        "max": 17243.167,
+        "mean": 17243.167,
+        "median": 17243.167,
+        "min": 17243.167,
+        "p90": 17243.167,
+        "p95": 17243.167
+      },
+      "server_total_ms": {
+        "max": 10443.176,
+        "mean": 6746.359,
+        "median": 6692.695,
+        "min": 5912.755,
+        "p90": 7042.842,
+        "p95": 7802.07
+      },
+      "subsequent_model_call_generation_ms": {
+        "max": 10425.168,
+        "mean": 6707.375,
+        "median": 6687.581,
+        "min": 5908.298,
+        "p90": 7024.851,
+        "p95": 7469.008
+      }
+    },
+    "tokens": {
+      "mean_generated_tokens_per_model_call": 109.398,
+      "mean_prompt_tokens_per_model_call": 1210.265,
+      "total_generated_tokens": 9080,
+      "total_prompt_tokens": 100452
+    }
+  }
+}
