@@ -240,7 +240,7 @@ jobs:
           # Modal's terminal renderer may wrap ``.modal.run`` as ``.moda``
           # followed by a newline and ``l.run``.  Rejoin only that known URL
           # boundary before extracting endpoint URLs.
-          log = re.sub(r"(?i)(\.moda)\s*(l\.run)", r"\1\2", log)
+          log = re.sub(r"(?i)(\.moda)[\s\S]{0,300}?(l\.run)", r"\1\2", log)
           urls = []
           for value in re.findall(r"https://[^\s`<>\"']+\.modal\.run", log):
               value = value.rstrip(".,)")
