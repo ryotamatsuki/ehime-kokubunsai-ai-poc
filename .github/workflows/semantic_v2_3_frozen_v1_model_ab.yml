@@ -1,0 +1,324 @@
+name: Semantic v2.3 Frozen v1 Live Model A-B
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - eval/semantic-v2-3-frozen-v1-model-ab
+    paths:
+      - semantic_v2_3_model_ab_eval.py
+      - .github/workflows/semantic_v2_3_frozen_v1_model_ab.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: semantic-v2-3-frozen-v1-model-ab
+  cancel-in-progress: false
+
+env:
+  EVALUATION_BRANCH: eval/semantic-v2-3-frozen-v1-model-ab
+
+jobs:
+  frozen-v1-model-ab:
+    runs-on: ubuntu-latest
+    environment: ehime-kokubunsai-ai-poc
+    timeout-minutes: 360
+    steps:
+      - name: Check out evaluation branch
+        uses: actions/checkout@v4
+        with:
+          ref: eval/semantic-v2-3-frozen-v1-model-ab
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Record remote, PR and workflow state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p artifacts/semantic-v2-3-frozen-v1-ab
+          git fetch origin --prune '+refs/pull/*/head:refs/remotes/origin/pr/*'
+          PYTHONPATH=. python - <<'PY'
+          import json
+          import os
+          import subprocess
+          import urllib.request
+          from pathlib import Path
+
+          owner = "ryotamatsuki"
+          repo = "ehime-kokubunsai-ai-poc"
+          refs = {
+              "origin/main": "refs/heads/main",
+              "origin/feature/model-selector-llmjp-v22": "refs/heads/feature/model-selector-llmjp-v22",
+              "origin/feature/semantic-operations-v2-3-evidence-bounded": "refs/heads/feature/semantic-operations-v2-3-evidence-bounded",
+              "PR #45": "refs/pull/45/head",
+              "PR #46": "refs/pull/46/head",
+          }
+          remote = {}
+          for label, ref in refs.items():
+              raw = subprocess.check_output(["git", "ls-remote", "origin", ref], text=True).strip()
+              remote[label] = {"ref": ref, "sha": raw.split()[0] if raw else None}
+
+          def api(path):
+              request = urllib.request.Request(
+                  f"https://api.github.com/repos/{owner}/{repo}/{path}",
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  return json.load(response)
+
+          open_prs = api("pulls?state=open&per_page=100")
+          workflows = api("actions/workflows?per_page=100")
+          payload = {
+              "recorded_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
+              "remote_refs": remote,
+              "open_prs": [
+                  {"number": item["number"], "title": item["title"], "draft": item["draft"], "state": item["state"], "head_sha": item["head"]["sha"], "base": item["base"]["ref"]}
+                  for item in open_prs
+              ],
+              "open_workflows": [
+                  {"id": item["id"], "name": item["name"], "path": item["path"], "state": item["state"]}
+                  for item in workflows.get("workflows", [])
+              ],
+          }
+          Path("artifacts/semantic-v2-3-frozen-v1-ab/remote_state.json").write_text(
+              json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+          )
+          print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+          PY
+
+      - name: Set and verify architecture freeze boundary
+        run: |
+          ARCHITECTURE_FROZEN_SHA="$(git rev-parse HEAD)"
+          ARCHITECTURE_FROZEN_TREE_SHA="$(git rev-parse HEAD^{tree})"
+          PR46_HEAD="$(git rev-parse refs/remotes/origin/pr/46)"
+          echo "ARCHITECTURE_FROZEN_SHA=$ARCHITECTURE_FROZEN_SHA" >> "$GITHUB_ENV"
+          echo "ARCHITECTURE_FROZEN_TREE_SHA=$ARCHITECTURE_FROZEN_TREE_SHA" >> "$GITHUB_ENV"
+          echo "PR46_HEAD=$PR46_HEAD" >> "$GITHUB_ENV"
+          PYTHONPATH=. python - <<'PY'
+          import json
+          import subprocess
+          from pathlib import Path
+          from semantic_freeze_v2_3 import validate_freeze_manifest
+
+          head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          pr46 = subprocess.check_output(["git", "rev-parse", "refs/remotes/origin/pr/46"], text=True).strip()
+          if subprocess.call(["git", "merge-base", "--is-ancestor", pr46, head]) != 0:
+              raise SystemExit("evaluation branch is not based on the current PR #46 head")
+          changed = subprocess.check_output(["git", "diff", "--name-only", pr46, head], text=True).splitlines()
+          allowed = {
+              "semantic_v2_3_model_ab_eval.py",
+              ".github/workflows/semantic_v2_3_frozen_v1_model_ab.yml",
+          }
+          unexpected = sorted(set(changed) - allowed)
+          if unexpected:
+              raise SystemExit(f"architecture/evaluation boundary changed unexpected files: {unexpected}")
+          freeze_path = Path("docs/semantic_operations_v2_3_eval_freeze.json")
+          manifest = json.loads(freeze_path.read_text(encoding="utf-8"))
+          validate_freeze_manifest(manifest)
+          print(json.dumps({
+              "architecture_frozen_sha": head,
+              "architecture_frozen_tree_sha": subprocess.check_output(["git", "rev-parse", "HEAD^{tree}"], text=True).strip(),
+              "pr46_head": pr46,
+              "changed_from_pr46": changed,
+              "freeze_manifest": "PASS",
+          }, sort_keys=True))
+          PY
+
+      - name: Install declared and evaluation dependencies
+        run: python -m pip install --upgrade -r requirements.txt modal 'fastapi[standard]' pytest 'lm-format-enforcer>=0.10,<1'
+
+      - name: Compile all Python sources
+        run: python -m compileall -q .
+
+      - name: Run standalone deterministic QA suites
+        run: |
+          PYTHONPATH=. python tests/run_search_v2_qa.py
+          PYTHONPATH=. python tests/run_conversation_router_qa.py
+          PYTHONPATH=. python tests/run_conversational_recovery_qa.py
+          PYTHONPATH=. python tests/run_recovery_v2_qa.py
+          PYTHONPATH=. python tests/run_participation_qa.py
+          PYTHONPATH=. python tests/run_recommendation_qa.py
+          PYTHONPATH=. python tests/run_pending_recommendation_qa.py
+          PYTHONPATH=. python tests/run_agentic_search_qa.py
+          PYTHONPATH=. python tests/run_command_semantic_qa.py
+          PYTHONPATH=. python tests/run_security_qa.py
+          PYTHONPATH=. python tests/run_recovery_benchmark.py
+
+      - name: Run full pytest regression
+        run: PYTHONPATH=. python -m pytest -q
+
+      - name: Run v2.3 schema, LMFE, one-call and backend contract checks
+        run: |
+          PYTHONPATH=. python - <<'PY'
+          import json
+          from lmformatenforcer import JsonSchemaParser
+          from semantic_atomic_v2_3 import ATOMIC_FRAME_JSON_SCHEMA_V23
+          from semantic_oracle_ceiling_v2_2 import evaluate_oracle_v22
+          from semantic_oracle_ceiling_v2_3 import evaluate_oracle_v23
+
+          JsonSchemaParser(ATOMIC_FRAME_JSON_SCHEMA_V23)
+          assert ATOMIC_FRAME_JSON_SCHEMA_V23["additionalProperties"] is False
+          assert "data_gap" not in ATOMIC_FRAME_JSON_SCHEMA_V23["properties"]
+          assert "clarification" not in ATOMIC_FRAME_JSON_SCHEMA_V23["properties"]
+          v22 = evaluate_oracle_v22()
+          v23 = evaluate_oracle_v23()
+          assert v22["cases"] == 100 and v22["machine_pass"] == 100, v22
+          assert v23["cases"] == 100 and v23["machine_pass"] == 100, v23
+          print(json.dumps({"lmfe": "PASS", "v2.2_oracle": v22, "v2.3_oracle": v23}, sort_keys=True))
+          PY
+          PYTHONPATH=. python - <<'PY'
+          from pathlib import Path
+          backend = Path("semantic_v2_3_multimodel_backend.py").read_text(encoding="utf-8")
+          orchestrator = Path("semantic_orchestrator_v2_3.py").read_text(encoding="utf-8")
+          verifier = Path("semantic_verifier_v2_3.py").read_text(encoding="utf-8")
+          assert backend.count('gpu="T4"') == 2
+          assert "do_sample=False" in backend and "repetition_penalty=1.02" in backend
+          assert "FRAME_MAX_NEW_TOKENS = 220" in backend
+          assert "repair" not in orchestrator.lower()
+          assert "sarashina" not in orchestrator.lower() and "llm-jp" not in orchestrator.lower()
+          assert "sarashina" not in verifier.lower() and "llm-jp" not in verifier.lower()
+          print("one-call/model-parity/backend contract: PASS")
+          PY
+
+      - name: Verify Frozen v1 corpus and sealed boundary metadata
+        run: |
+          PYTHONPATH=. python - <<'PY'
+          import json
+          from pathlib import Path
+          from semantic_freeze_v2_3 import SEALED_HOLDOUT_SHA256
+          from unexpected_utterances_v2_1_eval import load_frozen_v1_dataset
+
+          dataset = load_frozen_v1_dataset()
+          assert dataset["version"] == "unexpected-user-utterances-v1"
+          assert len(dataset["cases"]) == 100
+          sealed_manifest = json.loads(Path("tests/data/unexpected_utterances_holdout_v2_1/manifest.json").read_text(encoding="utf-8"))
+          assert sealed_manifest["total_cases"] == 200
+          assert sealed_manifest["payload_sha256"] == SEALED_HOLDOUT_SHA256
+          print(json.dumps({
+              "frozen_v1_cases": len(dataset["cases"]),
+              "sealed_v2_1_cases": sealed_manifest["total_cases"],
+              "sealed_payload_opened": False,
+              "sealed_payload_executed": False,
+              "sealed_payload_sha256": SEALED_HOLDOUT_SHA256,
+          }, sort_keys=True))
+          PY
+
+      - name: Download LLM-jp model cache for v2.3 evaluation backend
+        env:
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+        run: modal run --quiet semantic_v2_3_multimodel_backend.py::download_llmjp
+
+      - name: Deploy evaluation-only v2.3 multimodel backend
+        env:
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+        run: |
+          mkdir -p artifacts/semantic-v2-3-frozen-v1-ab
+          set -o pipefail
+          modal deploy semantic_v2_3_multimodel_backend.py 2>&1 | tee artifacts/semantic-v2-3-frozen-v1-ab/modal_deploy.log
+
+      - name: Resolve deployed v2.3 endpoint URLs
+        run: |
+          PYTHONPATH=. python - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          log = Path("artifacts/semantic-v2-3-frozen-v1-ab/modal_deploy.log").read_text(encoding="utf-8", errors="replace")
+          log = re.sub(r"\\x1b\\[[0-9;]*m", "", log)
+          urls = []
+          for value in re.findall(r"https://[^\\s`<>\"']+\\.modal\\.run", log):
+              value = value.rstrip(".,)")
+              if value not in urls:
+                  urls.append(value)
+          sarashina = [url for url in urls if "sarash" in url.lower()]
+          llmjp = [url for url in urls if "llmjp" in url.lower() or "llm-jp" in url.lower() or "llmj" in url.lower()]
+          if len(sarashina) != 1 or len(llmjp) != 1:
+              raise SystemExit(f"could not resolve exactly one endpoint per model from deploy output: {urls}")
+          result = {
+              "sarashina-2.2-3b": sarashina[0],
+              "llm-jp-4-8b": llmjp[0],
+          }
+          Path("artifacts/semantic-v2-3-frozen-v1-ab/modal_endpoints.json").write_text(
+              json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True) + "\\n", encoding="utf-8"
+          )
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as handle:
+              handle.write(f"SEMANTIC_V23_URL_SARASHINA_2_2_3B={sarashina[0]}\\n")
+              handle.write(f"SEMANTIC_V23_URL_LLM_JP_4_8B={llmjp[0]}\\n")
+          print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+          PY
+
+      - name: Create temporary authenticated Modal proxy token
+        env:
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+        run: |
+          PYTHONPATH=. python - <<'PY'
+          import os
+          import modal
+
+          workspace = modal.Workspace.from_context()
+          token = workspace.proxy_tokens.create()
+          try:
+              workspace.proxy_tokens.allow(token.token_id, "main")
+          except Exception as exc:
+              print(f"proxy-token allow(main) not required: {type(exc).__name__}")
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as handle:
+              handle.write(f"MODAL_KEY={token.token_id}\n")
+              handle.write(f"MODAL_SECRET={token.token_secret}\n")
+          print("temporary Modal proxy token: created")
+          PY
+
+      - name: Run authenticated smoke and official 100-question interleaved A-B
+        run: |
+          rm -rf artifacts/semantic-v2-3-frozen-v1-ab/sarashina_raw.jsonl artifacts/semantic-v2-3-frozen-v1-ab/llmjp_raw.jsonl
+          PYTHONPATH=. python semantic_v2_3_model_ab_eval.py \
+            --out-dir artifacts/semantic-v2-3-frozen-v1-ab \
+            --architecture-frozen-sha "$ARCHITECTURE_FROZEN_SHA" \
+            --evaluation-branch "$EVALUATION_BRANCH"
+
+      - name: Verify final evaluation integrity
+        if: always()
+        run: |
+          PYTHONPATH=. python - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path("artifacts/semantic-v2-3-frozen-v1-ab")
+          status_path = root / "evaluation_status.json"
+          if not status_path.exists():
+              print("evaluation status unavailable; workflow failed before runner start")
+              raise SystemExit(0)
+          status = json.loads(status_path.read_text(encoding="utf-8"))
+          print(json.dumps(status, ensure_ascii=False, sort_keys=True))
+          if status.get("status") == "completed":
+              summary = json.loads((root / "summary.json").read_text(encoding="utf-8"))
+              assert summary["all_model_cases"] == {"sarashina-2.2-3b": 100, "llm-jp-4-8b": 100}
+              manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+              assert manifest["holdout_opened"] is False
+              assert manifest["holdout_executed"] is False
+              assert manifest["production_main_modified"] is False
+              assert manifest["production_main_deployed"] is False
+              print("formal evaluation integrity: PASS")
+          elif status.get("status") == "aborted":
+              raise SystemExit("formal evaluation aborted; raw partial artifact retained")
+          PY
+
+      - name: Upload evaluation artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: semantic-v2-3-frozen-v1-model-ab-${{ github.run_id }}
+          path: artifacts/semantic-v2-3-frozen-v1-ab/
+          if-no-files-found: warn
