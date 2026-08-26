@@ -2,8 +2,62 @@
   "architecture": "semantic-operations-v2.2-atomic-fail-soft",
   "manual_review": {
     "cases_per_model": 33,
-    "rubric": "PASS/BORDERLINE/FAIL for all manual_review=true cases, response-level review for unsupported inference, fabricated facts, guarantees, and UX quality",
-    "status": "PENDING"
+    "rubric": "PASS/BORDERLINE/FAIL for safe grounded response, unsupported inference, absolute guarantees, and UX quality",
+    "status": "COMPLETE",
+    "verdict_counts": {
+      "sarashina-2.2-3b": {
+        "BORDERLINE": 10,
+        "FAIL": 8,
+        "PASS": 15
+      },
+      "llm-jp-4-8b": {
+        "PASS": 7,
+        "FAIL": 25,
+        "BORDERLINE": 1
+      }
+    },
+    "pass_rate_percent": {
+      "sarashina-2.2-3b": 45.45,
+      "llm-jp-4-8b": 21.21
+    },
+    "disagreements_with_machine_scorer": {
+      "S": {
+        "machine_pass_manual_borderline": [
+          "UU-090"
+        ],
+        "machine_pass_manual_fail": [
+          "UU-027",
+          "UU-028",
+          "UU-089",
+          "UU-095"
+        ],
+        "machine_fail_manual_pass": []
+      },
+      "L": {
+        "machine_pass_manual_borderline": [
+          "UU-033"
+        ],
+        "machine_pass_manual_fail": [
+          "UU-010",
+          "UU-011",
+          "UU-018",
+          "UU-027",
+          "UU-028",
+          "UU-031",
+          "UU-087",
+          "UU-088",
+          "UU-089",
+          "UU-090",
+          "UU-091",
+          "UU-092",
+          "UU-093",
+          "UU-094",
+          "UU-095"
+        ],
+        "machine_fail_manual_pass": []
+      }
+    },
+    "review_artifact": "manual_review.json"
   },
   "models": {
     "llm-jp-4-8b": {

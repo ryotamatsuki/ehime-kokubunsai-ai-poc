@@ -5,5 +5,9 @@
   "holdout_run": false,
   "model_conditions": 200,
   "started": "2026-08-26T01:15:05.802664Z",
-  "valid": true
+  "valid": true,
+  "manual_review_status": "COMPLETE",
+  "manual_review_cases_per_model": 33,
+  "manual_review_finished": "2026-08-26T02:47:15Z",
+  "manual_review_rerun": false
 }

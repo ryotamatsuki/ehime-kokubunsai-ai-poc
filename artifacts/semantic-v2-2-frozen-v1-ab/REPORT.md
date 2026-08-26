@@ -1,89 +1,201 @@
 # Semantic Operations v2.2 Frozen v1 Live A/B Evaluation
 
-## 1. Conclusion
+## 1. 結論
 
-Evaluation validity: **VALID**
-Sarashina 2.2 3B: **66/100 machine PASS**
-LLM-jp 4 8B: **72/100 machine PASS**
-Decision: **PENDING_MANUAL_REVIEW**
+評価は有効である。
 
-Manual review is recorded as PENDING in this first artifact. The final report is updated only after the 33 manual-review cases per model are reviewed under the same rubric.
+| モデル | Machine PASS | Manual review（33問） | Structural valid | Median generation | p95 generation | Generated tokens |
+|---|---:|---:|---:|---:|---:|---:|
+| Sarashina 2.2 3B | 66/100 | PASS 15 / BORDERLINE 10 / FAIL 8 | 81/83 | 6,688.112 ms | 7,796.864 ms | 9,080 |
+| LLM-jp 4 8B | 72/100 | PASS 7 / BORDERLINE 1 / FAIL 25 | 83/83 | 8,742.337 ms | 13,935.809 ms | 10,637 |
+
+最終診断は **C. Architecture still bottleneck** とする。
+
+LLM-jpはMachine PASSで6ポイント上回ったが、McNemar exact two-sided p-valueは0.17956543であり、100問のpaired比較から有意な優位差とは判定できない。
+
+さらに、manual review対象では、LLM-jpが未登録の適合性やアクセシビリティを検索条件へ変換したケースが多く、Machine scorerが安全性とUXの失敗を十分に拾えていない。
+
+したがって、8B化をそのまま「materially better」と結論づけることも、Sarashinaを最終freezeすることもできない。
 
 ## 2. Evaluation integrity
 
 - Architecture frozen SHA: `b2ba866d1f4879bef866be9e9b19fc653fbe5d31`
 - Evaluation branch: `eval/semantic-v2-2-frozen-v1-model-ab`
-- Frozen v1 corpus: `unexpected-user-utterances-v1`, None cases
-- Frozen v1 corpus SHA-256: `2b11af35e07469a7244c0413abbee948daf04cedc25eebabe12cb0c9cf317efe`
-- Same prompt, schema, LMFE, verifier, reducer, executor, generation settings, order policy, and scorer
-- No prompt/rule/few-shot/architecture/expected-result tuning during the run
-- Sealed v2.1 200-case payload: NOT OPENED / NOT RUN
+- Live evaluation workflow run: `32918096539`
+- Live run head SHA: `9fcafe1cc51012d6f802fabc3474e4951ec5fb9f`
+- Frozen v1 corpus: `unexpected-user-utterances-v1`, 100 cases, SHA-256 `2b11af35e07469a7244c0413abbee948daf04cedc25eebabe12cb0c9cf317efe`
+- Same prompt, few-shot, Atomic schema, LMFE, verifier, reducer, executor, generation settings, retry policy, and scorer
+- Odd case: Sarashina then LLM-jp; even case: LLM-jp then Sarashina
+- Model quality retry: none; one request per model-called case
+- Production main modified: no
+- PR #45 merged: no
+- Sealed v2.1 200-case payload: **NOT OPENED / NOT RUN**
 
-## 3. Total result
+Both endpoint smoke tests passed before the formal run.
 
-| Model | Machine PASS | Model-called | Zero-call deterministic | Structural valid | Median generation ms | p95 generation ms | Generated tokens |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| Sarashina 2.2 3B | 66/100 | 83 | 17 | 81/83 | 6688.112 | 7796.864 | 9080 |
-| LLM-jp 4 8B | 72/100 | 83 | 17 | 83/83 | 8742.337 | 13935.809 | 10637 |
+- Sarashina: HTTP, JSON, Atomic schema, LMFE, model ID/key, cache/load, and non-empty output all passed.
+- LLM-jp: HTTP, JSON, Atomic schema, LMFE, model ID/key, cache/load, and non-empty output all passed.
 
-## 4. Category table
+## 3. Total machine result
 
-| Category | Cases | Sarashina | LLM-jp | Difference |
-|---|---:|---:|---:|---:|
-| ambiguous_suitability | 20 | 11 | 14 | 3 |
-| colloquial_typo_dialect | 10 | 6 | 8 | 2 |
-| compound_constraints | 15 | 7 | 10 | 3 |
-| context_followup | 15 | 12 | 13 | 1 |
-| data_gap_boundary | 10 | 10 | 10 | 0 |
-| negation_priority | 10 | 6 | 3 | -3 |
-| security_scope | 5 | 5 | 5 | 0 |
-| underspecified | 15 | 9 | 9 | 0 |
+| Model | Cases | Model-called | Zero-call deterministic | Machine PASS | Structural valid | Median generation | p95 generation | Total prompt tokens | Total generated tokens |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Sarashina 2.2 3B | 100 | 83 | 17 | 66 | 81/83 | 6,688.112 ms | 7,796.864 ms | 100,452 | 9,080 |
+| LLM-jp 4 8B | 100 | 83 | 17 | 72 | 83/83 | 8,742.337 ms | 13,935.809 ms | 110,942 | 10,637 |
+
+LLM-jpのモデル推論中央値はSarashinaより2,054.225 ms（30.71%）長く、p95は6,138.945 ms（78.74%）長い。
+
+コンテナセットアップも、Sarashinaの17,243.167 msに対してLLM-jpは31,560.408 msだった。
+
+## 4. Category result
+
+Machine PASSは100問全体、Manual reviewは事前指定された33問だけを集計している。
+
+| Category | Cases | Sarashina machine | LLM-jp machine | Difference | Sarashina manual P/B/F | LLM-jp manual P/B/F |
+|---|---:|---:|---:|---:|---:|---:|
+| ambiguous_suitability | 20 | 11 | 14 | +3 | 3/5/2 | 3/0/7 |
+| colloquial_typo_dialect | 10 | 6 | 8 | +2 | 1/1/0 | 1/0/1 |
+| compound_constraints | 15 | 7 | 10 | +3 | 0/1/0 | 0/0/1 |
+| context_followup | 15 | 12 | 13 | +1 | 1/0/0 | 1/0/0 |
+| data_gap_boundary | 10 | 10 | 10 | 0 | 7/1/2 | 1/0/9 |
+| negation_priority | 10 | 6 | 3 | -3 | — | — |
+| security_scope | 5 | 5 | 5 | 0 | — | — |
+| underspecified | 15 | 9 | 9 | 0 | 3/2/4 | 1/1/7 |
+
+LLM-jpのMachine PASS差は、ambiguous、compound、colloquialで観測された。
+
+一方、negation_priorityではSarashinaが6/10、LLM-jpが3/10であり、モデル変更による改善は一貫していない。
 
 ## 5. Pairwise result
+
+| Bucket | Cases |
+|---|---:|
+| Both PASS | 62 |
+| Sarashina only PASS | 4 |
+| LLM-jp only PASS | 10 |
+| Both FAIL | 24 |
+
+LLM-jp-only PASSは `UU-004, UU-006, UU-012, UU-037, UU-039, UU-045, UU-052, UU-053, UU-077, UU-079` である。
+
+Sarashina-only PASSは `UU-051, UU-066, UU-068, UU-072` である。
+
+### Raw Atomic frameの差
+
+| Case | LLM-jp-only改善で観測された差 |
+|---|---|
+| UU-004 | 両モデルとも `low_mobility=require`。Sarashinaは `data_gap=wheelchair_access` でunsupportedへ進み、LLM-jpはdata gapなしで検索を実行した。 |
+| UU-006 | Sarashinaは `seated=prefer` と `walk_explore=exclude`、LLM-jpは `low_mobility=prefer`。後者がFrozen v1の期待語彙に一致した。 |
+| UU-012 | 両モデルとも `low_mobility=require, seated=require`。Sarashinaは車椅子データ欠落で停止し、LLM-jpは検索を実行した。 |
+| UU-037 | Sarashinaは予約解除を保持したが、LLM-jpは雨条件から `venue=indoor` を追加し、予約条件を中立化した。 |
+| UU-039 | Sarashinaは `audience_participation=require`、LLM-jpは `hands_on=require`。期待された体験条件に後者が一致した。 |
+| UU-045 | Sarashinaは成人条件を `age_group=adult` とし、座席必須などを追加した。LLM-jpは `audience=adult` と工芸、屋内、料金条件だけを保持した。 |
+| UU-052 | Sarashinaは料金解除を出したが `entry_free` を設定しなかった。LLM-jpは `entry_free=true` と `refine_previous=true` を出した。 |
+| UU-053 | Sarashinaは予約解除を出したが、LLM-jpは解除を実行側の検索条件へ正しく反映した。 |
+| UU-077 | Sarashinaは予約解除を出した。LLM-jpは不要な予約条件を残さず、期待された検索を実行した。 |
+| UU-079 | SarashinaはAtomic frame invalidでclarificationへ落ちた。LLM-jpは雨 preferenceを抽出して検索した。 |
+
+この差は、どのatom判断が変わったかを示すが、8Bのパラメータ数だけが原因だとは判定しない。
+
+Sarashina-only PASSでは、LLM-jpが `region=release`、`entry_free=true`、`venue=indoor` など、ユーザーが解除した条件を残したケースが確認された。
+
+## 6. Structural validity
+
+- Sarashina: model-called 83、JSON parse success 83、Atomic schema valid 81/83、invalid frame 2、empty 0、truncated 0
+- LLM-jp: model-called 83、JSON parse success 83、Atomic schema valid 83/83、invalid frame 0、empty 0、truncated 0
+- Sarashinaのinvalid frameは `UU-079` と `UU-085`
+- 両モデルとも1ケース最大1 generation callを維持した
+
+LLM-jpは構造的には2ケース分よい。
+
+しかし、構造エラーは全体の主因ではない。
+
+## 7. Failure clusters
+
+Machine failure clusterは次のとおりである。
+
+| Cluster | Sarashina | LLM-jp |
+|---|---:|---:|
+| flow_status_mismatch | 18 | 15 |
+| empty_output | 17 | 17 |
+| experience_require_error | 7 | 4 |
+| reservation_error | 5 | 1 |
+| application_semantic_failure | 3 | 3 |
+| experience_prefer_error | 2 | 1 |
+| rain_error | 2 | 1 |
+| fee_error | 1 | 3 |
+| その他 | 4 | 6 |
+
+両モデルで24ケースが共通してFAILしている。
+
+また、manual reviewでは、Machine PASSが安全な応答を意味しないケースが確認された。
+
+- Sarashina: Machine PASSだがmanual FAILが4件、manual BORDERLINEが1件
+- LLM-jp: Machine PASSだがmanual FAILが15件、manual BORDERLINEが1件
+
+LLM-jpのmanual FAILは、主にdata-gap boundary、未定義の適合性、単独参加や医療的安全性などを、根拠のない検索条件へ変換したものだった。
+
+この差は、モデル能力だけでなく、manual rubricとmachine scorerの契約が一致していないことを示す。
+
+## 8. Manual review
+
+manual reviewは事前指定された33ケースについて、保存済みraw frame、verified frame、reducer、executor、最終応答を再生成なしで確認した。
+
+| Model | PASS | BORDERLINE | FAIL |
+|---|---:|---:|---:|
+| Sarashina 2.2 3B | 15 | 10 | 8 |
+| LLM-jp 4 8B | 7 | 1 | 25 |
+
+判定基準は、根拠データに基づく意味処理が成立しているか、未定義の適合性や絶対保証を生成していないか、必要な確認やdata-gap説明を返しているかである。
+
+manualの全記録は `manual_review.json` に保存した。
+
+## 9. Architecture versus model diagnosis
+
+今回の結果から、LLM-jp 8Bが構造面で優位であることは確認できる。
+
+しかし、総合Machine PASS差は6ポイントにとどまり、paired検定でも明確な差ではない。
+
+さらに、両モデルの共通FAILが24件あり、flow/status mismatchがSarashina 18件、LLM-jp 15件残っている。
+
+manual reviewではLLM-jpのdata-gap boundary失敗が多く、Machine scorerは「検索を実行できた」ことをPASSとして数える一方で、「その検索条件を根拠なく作っていないか」を十分に評価できていない。
+
+したがって、現在の主要課題は3Bから8Bへの交換だけでは解消しない。
+
+## 10. Recommended next action
+
+次に行う作業は1つに絞る。
+
+**data-gap boundary、undefined suitability、negation/release、flow/statusのmanual rubricと実行契約を先に一致させるarchitecture修正を行い、その修正版を新しいfreeze SHAとしてFrozen v1 100問A/Bから再評価する。**
+
+修正後の再評価が終わるまで、PR #45のmerge、production設定変更、sealed v2.1 holdoutの実行は行わない。
+
+## Final required one-screen numbers
+
+Sarashina 2.2 3B
+
+- Machine PASS: 66/100
+- Manual: PASS 15 / BORDERLINE 10 / FAIL 8
+- Structural valid: 81/83 model calls
+- Median latency: 6,688.112 ms
+- p95 latency: 7,796.864 ms
+- Total generated tokens: 9,080
+
+LLM-jp 4 8B
+
+- Machine PASS: 72/100
+- Manual: PASS 7 / BORDERLINE 1 / FAIL 25
+- Structural valid: 83/83 model calls
+- Median latency: 8,742.337 ms
+- p95 latency: 13,935.809 ms
+- Total generated tokens: 10,637
+
+Pairwise
 
 - Both PASS: 62
 - Sarashina only PASS: 4
 - LLM-jp only PASS: 10
 - Both FAIL: 24
-- McNemar exact two-sided p-value: 0.17956543
 
-## 6. Structural validity
+Final diagnosis: **C. Architecture still bottleneck**
 
-- Sarashina: JSON `83`, Atomic schema `81/83`, invalid `2`, empty `0`, truncated `0`
-- LLM-jp: JSON `83`, Atomic schema `83/83`, invalid `0`, empty `0`, truncated `0`
-
-## 7. Failure clusters
-
-- Sarashina: `{"application_semantic_failure": 3, "audience_error": 1, "empty_output": 17, "experience_prefer_error": 2, "experience_require_error": 7, "fail_soft_overuse": 1, "fail_soft_underuse": 1, "fee_error": 1, "flow_status_mismatch": 18, "rain_error": 2, "reservation_error": 5, "schema_invalid": 2, "scope_error": 1}`
-- LLM-jp: `{"application_semantic_failure": 3, "empty_output": 17, "experience_prefer_error": 1, "experience_require_error": 4, "fee_error": 3, "flow_status_mismatch": 15, "municipality_error": 1, "rain_error": 1, "region_error": 1, "reservation_error": 1, "scope_error": 1, "venue_error": 2}`
-
-## 8. Latency / tokens
-
-- Sarashina latency: `{"client_request_ms": {"max": 42128.879, "mean": 7478.741, "median": 6956.589, "min": 6171.567, "p90": 7511.275, "p95": 8409.339}, "first_model_call_generation_ms": {"max": 9531.13, "mean": 9531.13, "median": 9531.13, "min": 9531.13, "p90": 9531.13, "p95": 9531.13}, "model_inference_generation_ms": {"max": 10425.168, "mean": 6741.396, "median": 6688.112, "min": 5908.298, "p90": 7038.398, "p95": 7796.864}, "reported_container_setup_ms": {"max": 17243.167, "mean": 17243.167, "median": 17243.167, "min": 17243.167, "p90": 17243.167, "p95": 17243.167}, "server_total_ms": {"max": 10443.176, "mean": 6746.359, "median": 6692.695, "min": 5912.755, "p90": 7042.842, "p95": 7802.07}, "subsequent_model_call_generation_ms": {"max": 10425.168, "mean": 6707.375, "median": 6687.581, "min": 5908.298, "p90": 7024.851, "p95": 7469.008}}`
-- LLM-jp latency: `{"client_request_ms": {"max": 16350.414, "mean": 10778.54, "median": 9028.64, "min": 8563.723, "p90": 14189.384, "p95": 14274.906}, "first_model_call_generation_ms": {"max": 8697.977, "mean": 8697.977, "median": 8697.977, "min": 8697.977, "p90": 8697.977, "p95": 8697.977}, "model_inference_generation_ms": {"max": 14067.039, "mean": 10449.912, "median": 8742.337, "min": 8279.753, "p90": 13878.758, "p95": 13935.809}, "reported_container_setup_ms": {"max": 31560.408, "mean": 31560.408, "median": 31560.408, "min": 31560.408, "p90": 31560.408, "p95": 31560.408}, "server_total_ms": {"max": 14072.778, "mean": 10455.695, "median": 8747.994, "min": 8285.189, "p90": 13884.427, "p95": 13943.049}, "subsequent_model_call_generation_ms": {"max": 14067.039, "mean": 10471.277, "median": 8760.014, "min": 8279.753, "p90": 13878.975, "p95": 13936.079}}`
-- Sarashina tokens: prompt total `100452`, generated total `9080`
-- LLM-jp tokens: prompt total `110942`, generated total `10637`
-
-## 9. Important improved cases
-
-LLM-jp-only PASS cases: `UU-004, UU-006, UU-012, UU-037, UU-039, UU-045, UU-052, UU-053, UU-077, UU-079`
-The final report must explain the changed raw Atomic atoms for each materially relevant pair; it must not infer that the improvement is caused by parameter count alone.
-
-## 10. Important regressions
-
-Sarashina-only PASS cases: `UU-051, UU-066, UU-068, UU-072`
-
-## 11. Architecture vs model bottleneck diagnosis
-
-Pending completion of manual review and failure-cluster inspection. Shared failures with valid raw frames will be treated as architecture/data-semantics candidates; model-specific atom differences will be treated as model-sensitive evidence.
-
-## 12. Recommended next action
-
-Do not merge PR #45 or run the sealed holdout until the final A/B report has been reviewed and one of A/B/C/D is selected.
-
-## Final required one-screen numbers
-
-- Sarashina: Machine PASS 66/100; Manual PASS/BORDERLINE/FAIL pending; Structural 81/83; Median 6688.112 ms; p95 7796.864 ms; Generated tokens 9080
-- LLM-jp: Machine PASS 72/100; Manual PASS/BORDERLINE/FAIL pending; Structural 83/83; Median 8742.337 ms; p95 13935.809 ms; Generated tokens 10637
-- Pairwise: Both 62; Sarashina-only 4; LLM-jp-only 10; Both fail 24
-- Final diagnosis: PENDING_MANUAL_REVIEW
+Sealed v2.1 200 holdout: **NOT OPENED / NOT RUN**

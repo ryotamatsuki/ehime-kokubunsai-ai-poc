@@ -27,5 +27,17 @@
     "reservation_error": 5,
     "schema_invalid": 2,
     "scope_error": 1
+  },
+  "manual_review": {
+    "sarashina-2.2-3b": {
+      "BORDERLINE": 10,
+      "FAIL": 8,
+      "PASS": 15
+    },
+    "llm-jp-4-8b": {
+      "PASS": 7,
+      "FAIL": 25,
+      "BORDERLINE": 1
+    }
   }
 }
