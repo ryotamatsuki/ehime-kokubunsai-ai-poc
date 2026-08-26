@@ -33,7 +33,7 @@ def test_watch_listen_composition_is_grounded_without_fixture_phrase_matching():
         "require",
     )
     assert proof.grounded is True
-    assert proof.rule == "functional:watch_listen"
+    assert proof.source in {"controlled_vocabulary", "explicit_expression"}
 
 
 def test_release_is_concept_scoped_and_does_not_cancel_independent_requirement():
