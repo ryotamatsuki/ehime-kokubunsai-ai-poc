@@ -1,0 +1,203 @@
+name: Semantic v2.2 Frozen v1 Model A-B Evaluation
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - eval/semantic-v2-2-frozen-v1-model-ab
+    paths:
+      - semantic_v2_2_model_ab_eval.py
+      - .github/workflows/semantic_v2_2_frozen_v1_model_ab.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: semantic-v2-2-frozen-v1-model-ab
+  cancel-in-progress: false
+
+env:
+  ARCHITECTURE_FROZEN_SHA: b2ba866d1f4879bef866be9e9b19fc653fbe5d31
+  EVALUATION_BRANCH: eval/semantic-v2-2-frozen-v1-model-ab
+
+jobs:
+  frozen-v1-model-ab:
+    runs-on: ubuntu-latest
+    environment: ehime-kokubunsai-ai-poc
+    timeout-minutes: 180
+    steps:
+      - name: Check out evaluation branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install declared and evaluation dependencies
+        run: |
+          python -m pip install --upgrade -r requirements.txt modal fastapi "lm-format-enforcer>=0.10,<1"
+
+      - name: Compile all Python sources
+        run: python -m compileall -q .
+
+      - name: Run deterministic QA suites
+        run: |
+          python tests/run_search_v2_qa.py
+          python tests/run_conversation_router_qa.py
+          python tests/run_conversational_recovery_qa.py
+          python tests/run_recovery_v2_qa.py
+          python tests/run_participation_qa.py
+          python tests/run_recommendation_qa.py
+          python tests/run_pending_recommendation_qa.py
+          python tests/run_agentic_search_qa.py
+          python tests/run_command_semantic_qa.py
+          python tests/run_security_qa.py
+          python tests/run_recovery_benchmark.py
+
+      - name: Run full pytest
+        run: PYTHONPATH=. python -m pytest -q
+
+      - name: Run Semantic v2.2 Oracle
+        run: |
+          PYTHONPATH=. python - <<'PY'
+          from semantic_oracle_ceiling_v2_2 import evaluate_oracle_v22
+          result = evaluate_oracle_v22()
+          assert result["cases"] == 100, result
+          assert result["machine_pass"] == 100, result
+          print("Semantic v2.2 Oracle: 100/100 PASS")
+          PY
+
+      - name: Verify architecture freeze and model registry
+        run: |
+          python - <<'PY'
+          import json
+          import subprocess
+          from pathlib import Path
+          import semantic_model_registry
+
+          assert subprocess.check_output(["git", "merge-base", "--is-ancestor", "${{ env.ARCHITECTURE_FROZEN_SHA }}", "HEAD"], stderr=subprocess.STDOUT) is not None
+          freeze = json.loads(Path("docs/semantic_operations_v2_2_eval_freeze.json").read_text(encoding="utf-8"))
+          assert freeze["status"] == "ready_before_live_run"
+          contract = freeze["v2_2_contract"]
+          assert contract["few_shot_examples"] == 5
+          assert contract["model_calls_per_residual_turn_max"] == 1
+          assert contract["repair_generation"] is False
+          assert contract["uncertainty_behavioral_threshold_enabled"] is False
+          for path, expected in freeze["critical_git_blobs"].items():
+              actual = subprocess.check_output(["git", "hash-object", path], text=True).strip()
+              assert actual == expected, (path, expected, actual)
+          specs = {spec.key: spec for spec in semantic_model_registry.MODEL_SPECS}
+          assert set(specs) == {"sarashina-2.2-3b", "llm-jp-4-8b"}
+          assert specs["sarashina-2.2-3b"].model_id == "sbintuitions/sarashina2.2-3b-instruct-v0.1"
+          assert specs["llm-jp-4-8b"].model_id == "llm-jp/llm-jp-4-8b-instruct"
+          assert all(spec.endpoint_url.startswith("https://") for spec in specs.values())
+          print("architecture freeze and model registry: PASS")
+          PY
+
+      - name: Verify Frozen v1 corpus contract
+        run: |
+          PYTHONPATH=. python - <<'PY'
+          from unexpected_utterances_v2_1_eval import load_frozen_v1_dataset
+          dataset = load_frozen_v1_dataset()
+          assert dataset["version"] == "unexpected-user-utterances-v1"
+          assert len(dataset["cases"]) == 100
+          print("Frozen v1 corpus: 100/100, UU-001..UU-100")
+          PY
+
+      - name: Verify sealed v2.1 boundary without opening payload
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          root = Path("tests/data/unexpected_utterances_holdout_v2_1")
+          manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+          payload = root / manifest["payload"]
+          digest = hashlib.sha256(payload.read_bytes()).hexdigest()
+          assert manifest["sealed_before_v2_1_implementation"] is True
+          assert manifest["total_cases"] == 200
+          assert digest == manifest["payload_sha256"]
+          assert digest == "c844dda17248c0e7f16cd2985652e62bb0f8b601bf21196d6801479580899c92"
+          print(json.dumps({
+              "version": manifest["version"],
+              "total_cases": manifest["total_cases"],
+              "payload_sha256": digest,
+              "opened": False,
+              "decompressed": False,
+              "executed": False,
+          }, ensure_ascii=False, sort_keys=True))
+          PY
+
+      - name: Authenticated live smoke for both model endpoints and cache/load check
+        env:
+          MODAL_KEY: ${{ secrets.MODAL_KEY }}
+          MODAL_SECRET: ${{ secrets.MODAL_SECRET }}
+          MODAL_V22_SARASHINA_URL: ${{ secrets.MODAL_V22_SARASHINA_URL }}
+          MODAL_V22_LLMJP_URL: ${{ secrets.MODAL_V22_LLMJP_URL }}
+        run: |
+          rm -rf artifacts/semantic-v2-2-frozen-v1-ab
+          python semantic_v2_2_model_ab_eval.py \
+            --out-dir artifacts/semantic-v2-2-frozen-v1-ab \
+            --architecture-frozen-sha "$ARCHITECTURE_FROZEN_SHA" \
+            --evaluation-branch "$EVALUATION_BRANCH" \
+            --smoke-only
+
+      - name: Run official Frozen v1 100-question interleaved live A/B evaluation
+        env:
+          MODAL_KEY: ${{ secrets.MODAL_KEY }}
+          MODAL_SECRET: ${{ secrets.MODAL_SECRET }}
+          MODAL_V22_SARASHINA_URL: ${{ secrets.MODAL_V22_SARASHINA_URL }}
+          MODAL_V22_LLMJP_URL: ${{ secrets.MODAL_V22_LLMJP_URL }}
+        run: |
+          python semantic_v2_2_model_ab_eval.py \
+            --out-dir artifacts/semantic-v2-2-frozen-v1-ab \
+            --architecture-frozen-sha "$ARCHITECTURE_FROZEN_SHA" \
+            --evaluation-branch "$EVALUATION_BRANCH" \
+            --skip-smoke
+
+      - name: Verify final evaluation integrity
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          root = Path("artifacts/semantic-v2-2-frozen-v1-ab")
+          status = root / "evaluation_status.json"
+          if not status.exists():
+              print("evaluation status: unavailable; run did not reach formal completion")
+              raise SystemExit(0)
+          payload = json.loads(status.read_text(encoding="utf-8"))
+          assert payload["valid"] is True
+          assert payload["formal_cases"] == 100
+          assert payload["model_conditions"] == 200
+          assert payload["holdout_opened"] is False
+          assert payload["holdout_run"] is False
+          print("formal evaluation integrity: PASS")
+          PY
+
+      - name: Upload evaluation artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: semantic-v2-2-frozen-v1-model-ab-${{ github.run_id }}
+          path: artifacts/semantic-v2-2-frozen-v1-ab/
+          if-no-files-found: warn
+
+      - name: Persist evaluation artifacts on evaluation branch
+        if: always()
+        run: |
+          if [ ! -d artifacts/semantic-v2-2-frozen-v1-ab ]; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add artifacts/semantic-v2-2-frozen-v1-ab
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "eval: persist Frozen v1 Semantic v2.2 model A-B results"
+          git push origin "HEAD:${EVALUATION_BRANCH}"
