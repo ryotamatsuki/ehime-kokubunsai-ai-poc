@@ -132,10 +132,29 @@ jobs:
           }, ensure_ascii=False, sort_keys=True))
           PY
 
+      - name: Create temporary authenticated Modal proxy token
+        env:
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+        run: |
+          python - <<'PY'
+          import os
+          import modal
+
+          workspace = modal.Workspace.from_context()
+          token = workspace.proxy_tokens.create()
+          try:
+              workspace.proxy_tokens.allow(token.token_id, "main")
+          except Exception as exc:
+              print(f"proxy-token allow(main) not required: {type(exc).__name__}")
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as handle:
+              handle.write(f"MODAL_KEY={token.token_id}\n")
+              handle.write(f"MODAL_SECRET={token.token_secret}\n")
+          print("temporary Modal proxy token: created")
+          PY
+
       - name: Authenticated live smoke for both model endpoints and cache/load check
         env:
-          MODAL_KEY: ${{ secrets.MODAL_TOKEN_ID }}
-          MODAL_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
           MODAL_V22_SARASHINA_URL: ${{ secrets.MODAL_V22_SARASHINA_URL }}
           MODAL_V22_LLMJP_URL: ${{ secrets.MODAL_V22_LLMJP_URL }}
         run: |
@@ -148,8 +167,6 @@ jobs:
 
       - name: Run official Frozen v1 100-question interleaved live A/B evaluation
         env:
-          MODAL_KEY: ${{ secrets.MODAL_TOKEN_ID }}
-          MODAL_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
           MODAL_V22_SARASHINA_URL: ${{ secrets.MODAL_V22_SARASHINA_URL }}
           MODAL_V22_LLMJP_URL: ${{ secrets.MODAL_V22_LLMJP_URL }}
         run: |
