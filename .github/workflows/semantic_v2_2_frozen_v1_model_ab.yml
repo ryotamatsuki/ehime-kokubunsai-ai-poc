@@ -134,8 +134,8 @@ jobs:
 
       - name: Authenticated live smoke for both model endpoints and cache/load check
         env:
-          MODAL_KEY: ${{ secrets.MODAL_KEY }}
-          MODAL_SECRET: ${{ secrets.MODAL_SECRET }}
+          MODAL_KEY: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
           MODAL_V22_SARASHINA_URL: ${{ secrets.MODAL_V22_SARASHINA_URL }}
           MODAL_V22_LLMJP_URL: ${{ secrets.MODAL_V22_LLMJP_URL }}
         run: |
@@ -148,8 +148,8 @@ jobs:
 
       - name: Run official Frozen v1 100-question interleaved live A/B evaluation
         env:
-          MODAL_KEY: ${{ secrets.MODAL_KEY }}
-          MODAL_SECRET: ${{ secrets.MODAL_SECRET }}
+          MODAL_KEY: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
           MODAL_V22_SARASHINA_URL: ${{ secrets.MODAL_V22_SARASHINA_URL }}
           MODAL_V22_LLMJP_URL: ${{ secrets.MODAL_V22_LLMJP_URL }}
         run: |
