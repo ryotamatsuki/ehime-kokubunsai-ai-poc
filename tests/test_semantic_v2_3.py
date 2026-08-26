@@ -106,7 +106,7 @@ def test_c_unsupported_suitability_proxy_experience_is_ignored():
 def test_d_explicit_watch_listen_is_retained_by_trusted_grounding():
     result = SemanticOperationsOrchestratorV23(
         frame_call=_call(_frame(evidence=EvidenceRequest.SUPPORTED_ATTRIBUTE))
-    ).handle_query("見る・聞くのを中心に楽しめる催し")
+    ).handle_query("鑑賞中心の催し")
     assert result.flow == "find_events"
     assert "watch_listen" in result.slots["experience_required"]
 
@@ -216,9 +216,9 @@ def test_n_invalid_model_output_fail_soft_preserves_trusted_grounding():
     result = SemanticOperationsOrchestratorV23(frame_call=broken).handle_query("松山で無料の催し")
     assert calls == 1
     assert result.frame_fallback is True
-    assert result.flow == "find_events"
-    assert result.slots["municipalities"] == ["松山市"]
-    assert result.slots["entry_free"] is True
+    assert result.status == "clarification"
+    assert result.deterministic_grounding["municipalities"] == ["松山市"]
+    assert result.deterministic_grounding["entry_free"] is True
 
 
 def test_positive_model_atom_without_independent_grounding_is_never_adopted():
