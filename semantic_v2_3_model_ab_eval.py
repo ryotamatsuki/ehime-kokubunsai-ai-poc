@@ -135,7 +135,9 @@ def _corpus_sha256() -> str:
 
     def add(name: str, data: bytes) -> None:
         name_bytes = name.encode("utf-8")
-        digest.update(len(name_bytes).to_bytes(8, "big"))
+        # Keep the v2.2 evaluation artifact's exact corpus encoding: the
+        # relative filename length is a uint32 and the file length is uint64.
+        digest.update(len(name_bytes).to_bytes(4, "big"))
         digest.update(name_bytes)
         digest.update(len(data).to_bytes(8, "big"))
         digest.update(data)

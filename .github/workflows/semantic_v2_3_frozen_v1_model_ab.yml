@@ -274,6 +274,8 @@ jobs:
 
           workspace = modal.Workspace.from_context()
           token = workspace.proxy_tokens.create()
+          print(f"::add-mask::{token.token_id}")
+          print(f"::add-mask::{token.token_secret}")
           try:
               workspace.proxy_tokens.allow(token.token_id, "main")
           except Exception as exc:
