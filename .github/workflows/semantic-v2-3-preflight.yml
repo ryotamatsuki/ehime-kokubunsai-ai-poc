@@ -64,8 +64,16 @@ jobs:
           assert result['capability_registry']['p95_ms'] < 5.0, result
           assert result['evidence_verifier']['p95_ms'] < 20.0, result
           PY
-      - name: Print reproducible v2.3 freeze fingerprints
-        run: PYTHONPATH=. python semantic_freeze_v2_3.py
+      - name: Validate v2.3 architecture freeze manifest
+        run: |
+          PYTHONPATH=. python - <<'PY'
+          import json
+          from pathlib import Path
+          from semantic_freeze_v2_3 import validate_freeze_manifest
+          raw = json.loads(Path('docs/semantic_operations_v2_3_eval_freeze.json').read_text(encoding='utf-8'))
+          validate_freeze_manifest(raw)
+          print('v2.3 architecture freeze manifest: PASS')
+          PY
       - name: Run v2.2 regression oracle ceiling
         run: |
           PYTHONPATH=. python - <<'PY'
