@@ -13,7 +13,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 from app_config import POC_REFERENCE_DATE
 from semantic_capability_registry_v2_3 import lookup_capability
-from semantic_evidence_v2_3 import AllowedSemanticAction, EvidenceRequest
+from semantic_evidence_v2_3 import AllowedSemanticAction, SemanticResolution
 from semantic_orchestrator_v2_3 import SemanticOperationsOrchestratorV23
 from unexpected_utterances_eval import _forbidden_present, _seed_state, _slot_subset, validate_dataset
 from unexpected_utterances_v2_1_eval import ObservableRemoteFrameCall, _latency_summary, _normalize, load_frozen_v1_dataset
@@ -25,44 +25,36 @@ class ManualRubricVerdict(str, Enum):
     FAIL = "FAIL"
 
 
+def _clarification_required(result) -> bool:
+    if result.semantic_resolution != SemanticResolution.RESOLVED.value:
+        return True
+    if result.capability is not None:
+        return result.capability.allowed_semantic_action is AllowedSemanticAction.CLARIFY
+    return result.clarification_reason in {"fail_soft", "no_executable_supported_constraints"}
+
+
 def evidence_boundary_checks(result) -> tuple[dict[str, bool], list[str]]:
     checks: dict[str, bool] = {}
     failures: list[str] = []
-    verification = result.verification
 
-    # An ungrounded atom can be attempted by a model, but v2.3 must never
-    # adopt it into the trusted reducer.  rejected_atoms are therefore not a
-    # failure by themselves; they are evidence that the guard did its job.
-    adopted_unsupported = 0
-    silent_coercion = 0
-    if verification is not None and verification.frame is not None:
-        rejected = set(verification.rejected_atoms)
-        for atom in verification.accepted_atoms:
-            if atom in rejected:
-                adopted_unsupported += 1
-        # A non-coercible request may coexist with an independently grounded
-        # explicit condition.  Only an adopted atom lacking proof is a silent
-        # coercion; the verifier makes this count structurally zero.
-        silent_coercion = adopted_unsupported
-
-    checks["unsupported_inference"] = adopted_unsupported == 0
-    checks["silent_coercion"] = silent_coercion == 0
-    if adopted_unsupported:
+    unsupported = int(result.unsupported_inference_count)
+    silent = int(result.silent_coercion_count)
+    checks["unsupported_inference"] = unsupported == 0
+    checks["silent_coercion"] = silent == 0
+    if unsupported:
         failures.append("unsupported_inference")
-    if silent_coercion:
+    if silent:
         failures.append("silent_coercion")
 
-    action = None
-    if result.frame is not None:
-        action = lookup_capability(result.frame.evidence_request).allowed_semantic_action
+    action = result.capability.allowed_semantic_action if result.capability is not None else None
     missed_data_gap = action is AllowedSemanticAction.DATA_GAP and not bool(result.data_gap_reason)
     false_data_gap = action is AllowedSemanticAction.SEARCH and bool(result.data_gap_reason)
-    clarification_required = action is AllowedSemanticAction.CLARIFY
+    clarification_required = _clarification_required(result)
     clarification_actual = bool(result.clarification_reason)
 
     checks["missed_data_gap"] = not missed_data_gap
     checks["false_data_gap"] = not false_data_gap
-    checks["clarification_precision"] = not (clarification_actual and not clarification_required and result.clarification_reason != "fail_soft")
+    checks["clarification_precision"] = not (clarification_actual and not clarification_required)
     checks["clarification_recall"] = not (clarification_required and not clarification_actual)
     if missed_data_gap:
         failures.append("missed_data_gap")
@@ -154,6 +146,7 @@ def evaluate_case_v23(
         "actual_status": result.status,
         "actual_slots": actual_slots,
         "evidence_request": result.evidence_request,
+        "semantic_resolution": result.semantic_resolution,
         "capability": result.capability.to_dict() if result.capability is not None else None,
         "clarification_reason": result.clarification_reason,
         "data_gap_reason": result.data_gap_reason,
@@ -161,8 +154,11 @@ def evaluate_case_v23(
         "accepted_atoms": list(result.accepted_atoms),
         "ignored_atoms": list(result.ignored_atoms),
         "rejected_atoms": list(result.rejected_atoms),
-        "silent_coercion_prevented_count": result.verification.silent_coercion_prevented_count if result.verification else 0,
-        "unsupported_inference_prevented_count": result.verification.unsupported_inference_count if result.verification else 0,
+        "grounding_proofs": list(result.grounding_proofs),
+        "unsupported_inference_count": result.unsupported_inference_count,
+        "silent_coercion_count": result.silent_coercion_count,
+        "silent_coercion_prevented_count": result.silent_coercion_prevented_count,
+        "unsupported_inference_prevented_count": result.unsupported_inference_prevented_count,
         "release_operations": list(result.release_operations),
         "frame_attempts": result.frame_attempts,
         "frame_fallback": result.frame_fallback,
@@ -194,27 +190,32 @@ def summarize_v23(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         bucket["machine_pass"] += int(bool(row.get("machine_pass")))
         failures.update(str(item) for item in row.get("failures", []))
     passed = sum(bool(row.get("machine_pass")) for row in rows)
-    model_rows = [row for row in rows if int(row.get("frame_attempts", 0)) > 0]
-    clarification_required = [row for row in model_rows if (row.get("capability") or {}).get("allowed_semantic_action") == "clarify"]
-    clarification_actual = [row for row in model_rows if row.get("clarification_reason")]
-    data_gap_required = [row for row in model_rows if (row.get("capability") or {}).get("allowed_semantic_action") == "data_gap"]
+    clarification_required = [
+        row for row in rows
+        if row.get("semantic_resolution") != SemanticResolution.RESOLVED.value
+        or (row.get("capability") or {}).get("allowed_semantic_action") == "clarify"
+        or row.get("clarification_reason") in {"fail_soft", "no_executable_supported_constraints"}
+    ]
+    clarification_actual = [row for row in rows if row.get("clarification_reason")]
+    true_clarifications = [row for row in clarification_actual if row in clarification_required]
+    data_gap_required = [row for row in rows if (row.get("capability") or {}).get("allowed_semantic_action") == "data_gap"]
     return {
         "cases": len(rows),
         "machine_pass_cases": passed,
         "machine_pass_rate": round(passed / len(rows), 4) if rows else 0.0,
-        "unsupported_inference_count": sum("unsupported_inference" in row.get("failures", []) for row in rows),
-        "silent_coercion_count": sum("silent_coercion" in row.get("failures", []) for row in rows),
+        "unsupported_inference_count": sum(int(row.get("unsupported_inference_count", 0)) for row in rows),
+        "silent_coercion_count": sum(int(row.get("silent_coercion_count", 0)) for row in rows),
         "missed_data_gap_count": sum("missed_data_gap" in row.get("failures", []) for row in rows),
         "false_data_gap_count": sum("false_data_gap" in row.get("failures", []) for row in rows),
-        "clarification_precision": round(sum(bool(row.get("clarification_reason")) and (row.get("capability") or {}).get("allowed_semantic_action") == "clarify" for row in model_rows) / len(clarification_actual), 4) if clarification_actual else 1.0,
-        "clarification_recall": round(sum(bool(row.get("clarification_reason")) for row in clarification_required) / len(clarification_required), 4) if clarification_required else 1.0,
+        "clarification_precision": round(len(true_clarifications) / len(clarification_actual), 4) if clarification_actual else 1.0,
+        "clarification_recall": round(len(true_clarifications) / len(clarification_required), 4) if clarification_required else 1.0,
         "semantic_constraint_accuracy": round(sum(not any(str(f).startswith("required_slots") or str(f).startswith("forbidden:") for f in row.get("failures", [])) for row in rows) / len(rows), 4) if rows else 0.0,
         "silent_coercion_prevented_count": sum(int(row.get("silent_coercion_prevented_count", 0)) for row in rows),
         "unsupported_inference_prevented_count": sum(int(row.get("unsupported_inference_prevented_count", 0)) for row in rows),
-        "total_frame_calls": sum(int((row.get("observability") or {}).get("calls", 0)) for row in model_rows),
+        "total_frame_calls": sum(int((row.get("observability") or {}).get("calls", 0)) for row in rows),
         "repair_calls": 0,
-        "prompt_tokens": sum(int((row.get("observability") or {}).get("prompt_tokens", 0)) for row in model_rows),
-        "generated_tokens": sum(int((row.get("observability") or {}).get("generated_tokens", 0)) for row in model_rows),
+        "prompt_tokens": sum(int((row.get("observability") or {}).get("prompt_tokens", 0)) for row in rows),
+        "generated_tokens": sum(int((row.get("observability") or {}).get("generated_tokens", 0)) for row in rows),
         "latency": {"orchestrator": _latency_summary([float(row.get("orchestrator_latency_ms", 0.0)) for row in rows])},
         "data_gap_required_cases": len(data_gap_required),
         "category_summary": dict(category),
