@@ -11,7 +11,7 @@ from typing import Any, Mapping
 
 from semantic_atomic_v2_2 import neutral_experience
 from semantic_atomic_v2_3 import build_atomic_frame_system_prompt_v23
-from semantic_evidence_v2_3 import EvidenceRequest
+from semantic_evidence_v2_3 import EvidenceRequest, SemanticResolution
 from semantic_prompt_v2_2 import minimal_atomic_state
 
 
@@ -20,6 +20,7 @@ def _frame(**overrides: Any) -> dict[str, Any]:
         "intent": "search",
         "scope": "new",
         "evidence_request": EvidenceRequest.NONE.value,
+        "semantic_resolution": SemanticResolution.RESOLVED.value,
         "municipality": "none",
         "region": "none",
         "fee": "none",
@@ -66,6 +67,15 @@ ATOMIC_FEW_SHOT_EXAMPLES_V23: tuple[dict[str, Any], ...] = (
         "state": {"has_previous_results": False, "has_previous_command": False},
         "grounded": {},
         "frame": _frame(evidence_request=EvidenceRequest.REALTIME_STATE.value),
+    },
+    {
+        "query": "条件分岐で選びたいが、分岐条件の値はまだ決まっていない",
+        "state": {"has_previous_results": False, "has_previous_command": False},
+        "grounded": {},
+        "frame": _frame(
+            evidence_request=EvidenceRequest.UNKNOWN_CAPABILITY.value,
+            semantic_resolution=SemanticResolution.CONDITIONAL.value,
+        ),
     },
     {
         "query": "前の候補は料金条件を外して、見る・聞く中心にしたい",
