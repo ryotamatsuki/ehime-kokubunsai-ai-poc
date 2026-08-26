@@ -64,6 +64,8 @@ jobs:
           assert result['capability_registry']['p95_ms'] < 5.0, result
           assert result['evidence_verifier']['p95_ms'] < 20.0, result
           PY
+      - name: Print reproducible v2.3 freeze fingerprints
+        run: PYTHONPATH=. python semantic_freeze_v2_3.py
       - name: Run v2.2 regression oracle ceiling
         run: |
           PYTHONPATH=. python - <<'PY'
@@ -116,6 +118,7 @@ jobs:
               'unexpected_utterances_v2_3_eval.py',
               'semantic_v2_3_multimodel_backend.py',
               'semantic_performance_v2_3.py',
+              'semantic_freeze_v2_3.py',
           )
           forbidden = (
               'unexpected_utterances_holdout_v2_1',
