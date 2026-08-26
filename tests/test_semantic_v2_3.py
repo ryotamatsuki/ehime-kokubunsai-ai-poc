@@ -7,17 +7,18 @@ import pytest
 from semantic_atomic_v2_2 import neutral_experience
 from semantic_atomic_v2_3 import ATOMIC_FRAME_JSON_SCHEMA_V23, AtomicSemanticFrameV23
 from semantic_capability_registry_v2_3 import CAPABILITY_REGISTRY, lookup_capability
-from semantic_evidence_v2_3 import AllowedSemanticAction, EvidenceRequest
+from semantic_evidence_v2_3 import AllowedSemanticAction, EvidenceRequest, SemanticResolution
 from semantic_orchestrator_v2_3 import SemanticOperationsOrchestratorV23
 from semantic_state_v2_3 import grounded_slots_from_query_v22, reduce_evidence_bounded_frame
 from semantic_verifier_v2_3 import verify_evidence_bounded_frame
 
 
-def _frame(*, evidence=EvidenceRequest.NONE, **overrides):
+def _frame(*, evidence=EvidenceRequest.NONE, resolution=SemanticResolution.RESOLVED, **overrides):
     payload = {
         "intent": "search",
         "scope": "new",
         "evidence_request": evidence.value if isinstance(evidence, EvidenceRequest) else str(evidence),
+        "semantic_resolution": resolution.value if isinstance(resolution, SemanticResolution) else str(resolution),
         "municipality": "none",
         "region": "none",
         "fee": "none",
@@ -58,6 +59,7 @@ def _state():
 def test_schema_is_closed_and_model_has_no_final_data_gap_or_clarification_fields():
     assert ATOMIC_FRAME_JSON_SCHEMA_V23["additionalProperties"] is False
     assert "evidence_request" in ATOMIC_FRAME_JSON_SCHEMA_V23["required"]
+    assert "semantic_resolution" in ATOMIC_FRAME_JSON_SCHEMA_V23["required"]
     assert "data_gap" not in ATOMIC_FRAME_JSON_SCHEMA_V23["properties"]
     assert "clarification" not in ATOMIC_FRAME_JSON_SCHEMA_V23["properties"]
 
@@ -100,6 +102,7 @@ def test_c_unsupported_suitability_proxy_experience_is_ignored():
     assert checked.frame is not None
     assert checked.frame.experience["watch_listen"] == "none"
     assert any("watch_listen" in item for item in checked.rejected_atoms)
+    assert checked.silent_coercion_count == 0
     assert checked.silent_coercion_prevented_count == 1
 
 
@@ -109,6 +112,21 @@ def test_d_explicit_watch_listen_is_retained_by_trusted_grounding():
     ).handle_query("鑑賞中心の催し")
     assert result.flow == "find_events"
     assert "watch_listen" in result.slots["experience_required"]
+
+
+def test_compositional_functional_expression_can_prove_supported_experience():
+    frame = _frame(
+        evidence=EvidenceRequest.SUPPORTED_ATTRIBUTE,
+        experience={"low_mobility": "require"},
+    )
+    checked = verify_evidence_bounded_frame(
+        frame,
+        query="足腰への負担が少なく移動も少ない催し",
+        grounded={},
+    )
+    assert checked.accepted and checked.frame is not None
+    assert checked.frame.experience["low_mobility"] == "require"
+    assert any("functional:mobility_load" in proof for proof in checked.grounding_proofs)
 
 
 def test_e_subjective_judgment_derives_data_gap():
@@ -124,6 +142,18 @@ def test_absolute_guarantee_derives_data_gap():
         frame_call=_call(_frame(evidence=EvidenceRequest.ABSOLUTE_GUARANTEE))
     ).handle_query("必ず期待どおりになる催しを選んで")
     assert result.status == "unsupported"
+    assert result.data_gap_reason == EvidenceRequest.ABSOLUTE_GUARANTEE.value
+
+
+def test_unresolved_signal_is_not_final_flow_but_python_derives_clarification():
+    result = SemanticOperationsOrchestratorV23(
+        frame_call=_call(_frame(
+            evidence=EvidenceRequest.ABSOLUTE_GUARANTEE,
+            resolution=SemanticResolution.AMBIGUOUS,
+        ))
+    ).handle_query("保証を求めつつ選択基準がまだ決まっていない")
+    assert result.status == "clarification"
+    assert result.clarification_reason == "semantic_resolution:ambiguous"
     assert result.data_gap_reason == EvidenceRequest.ABSOLUTE_GUARANTEE.value
 
 
@@ -197,6 +227,18 @@ def test_l_experience_release_is_concept_scoped():
     assert "experience:seated" in result.release_operations
 
 
+def test_negative_experience_operation_outranks_same_turn_positive_parse():
+    query = "体験は避けて、鑑賞中心がいい"
+    grounded = grounded_slots_from_query_v22(query)
+    frame = _frame(
+        evidence=EvidenceRequest.SUPPORTED_ATTRIBUTE,
+        experience={"hands_on": "exclude"},
+    )
+    checked = verify_evidence_bounded_frame(frame, query=query, grounded=grounded)
+    assert checked.accepted and checked.frame is not None
+    assert checked.frame.experience["hands_on"] == "exclude"
+
+
 def test_m_unsupported_request_does_not_erase_explicit_supported_slot():
     result = SemanticOperationsOrchestratorV23(
         frame_call=_call(_frame(evidence=EvidenceRequest.REALTIME_STATE))
@@ -226,6 +268,9 @@ def test_positive_model_atom_without_independent_grounding_is_never_adopted():
     checked = verify_evidence_bounded_frame(frame, query="静かな催しがいい", grounded={})
     assert checked.accepted is True
     assert checked.frame is not None and checked.frame.fee == "none"
+    assert checked.unsupported_inference_count == 0
+    assert checked.silent_coercion_count == 0
+    assert checked.unsupported_inference_prevented_count == 1
     assert checked.silent_coercion_prevented_count == 1
 
 
