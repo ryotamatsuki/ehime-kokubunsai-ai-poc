@@ -17,7 +17,7 @@ import requests
 
 SERVICE_ID = "ehime-kokubunsai-ai-poc"
 _MODAL_HOST = re.compile(
-    r"^[a-z0-9-]+--ehime-kokubunsai-ai-poc-api(?:-[a-z0-9-]+)*\\.modal\\.run$"
+    r"^[a-z0-9-]+--ehime-kokubunsai-ai-poc-api(?:-[a-z0-9-]+)*\.modal\.run$"
 )
 _HOST = re.compile(r"^[a-z0-9][a-z0-9.-]*[a-z0-9]$")
 _ALLOWED_AUTH_HEADERS = frozenset({"Authorization", "x-api-key", "api-key"})
