@@ -1,0 +1,98 @@
+name: Semantic v2.1 Preflight
+
+on:
+  push:
+    branches:
+      - feature/semantic-operations-v2-1-pre-eval
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: semantic-v2-1-preflight-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install test dependencies
+        run: python -m pip install --upgrade pytest 'lm-format-enforcer>=0.10,<1'
+      - name: Compile
+        run: python -m compileall -q .
+      - name: Run deterministic regression
+        run: python -m pytest -q
+      - name: Validate LMFE sparse schema
+        run: |
+          python - <<'PY'
+          from lmformatenforcer import JsonSchemaParser
+          from semantic_frame_v2_1 import SPARSE_FRAME_JSON_SCHEMA
+          JsonSchemaParser(SPARSE_FRAME_JSON_SCHEMA)
+          print('LMFE sparse schema: PASS')
+          PY
+      - name: Run frozen-v1 oracle ceiling for v2
+        run: python semantic_oracle_ceiling_v2.py
+      - name: Run frozen-v1 oracle ceiling for v2.1
+        run: python semantic_oracle_ceiling_v2_1.py
+      - name: Verify v2.1 empirical freeze manifest
+        run: |
+          python - <<'PY'
+          import json, subprocess
+          from pathlib import Path
+
+          freeze = json.loads(Path('docs/semantic_operations_v2_1_eval_freeze.json').read_text(encoding='utf-8'))
+          assert freeze['status'] == 'ready_before_live_run'
+          assert freeze['model']['official_format_enforcer'] == 'lmfe'
+          assert freeze['model']['raw_frame_capture'] is True
+          assert freeze['sealed_holdout']['opened'] is False
+          assert freeze['sealed_holdout']['runner_present'] is False
+          checked = {}
+          for path, expected in freeze['critical_git_blobs'].items():
+              actual = subprocess.check_output(['git', 'hash-object', path], text=True).strip()
+              assert actual == expected, f'{path}: {actual} != {expected}'
+              checked[path] = actual
+          print(json.dumps({'critical_git_blobs': checked, 'freeze': 'PASS'}, sort_keys=True))
+          PY
+      - name: Verify live harness cannot open sealed holdout
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          for path in ('semantic_v2_1_live_eval.py', 'unexpected_utterances_v2_1_eval.py'):
+              source = Path(path).read_text(encoding='utf-8')
+              assert 'tests/data/unexpected_utterances_holdout_v2_1' not in source
+              assert 'payload.json.gz' not in source
+          harness = Path('semantic_v2_1_live_eval.py').read_text(encoding='utf-8')
+          assert '@modal.fastapi_endpoint' not in harness
+          assert '@modal.web_endpoint' not in harness
+          assert 'def frozen_v1_eval' in harness
+          print('sealed-holdout execution boundary: PASS')
+          PY
+      - name: Verify sealed holdout remains opaque
+        run: |
+          python - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+          root = Path('tests/data/unexpected_utterances_holdout_v2_1')
+          manifest = json.loads((root / 'manifest.json').read_text(encoding='utf-8'))
+          payload = root / manifest['payload']
+          digest = hashlib.sha256(payload.read_bytes()).hexdigest()
+          freeze = json.loads(Path('docs/semantic_operations_v2_1_eval_freeze.json').read_text(encoding='utf-8'))
+          assert manifest['sealed_before_v2_1_implementation'] is True
+          assert manifest['total_cases'] == 200
+          assert digest == manifest['payload_sha256']
+          assert digest == freeze['sealed_holdout']['payload_sha256']
+          assert freeze['sealed_holdout']['opened'] is False
+          print(json.dumps({
+              'version': manifest['version'],
+              'total_cases': manifest['total_cases'],
+              'payload_sha256': digest,
+              'opened': False,
+          }, ensure_ascii=False, sort_keys=True))
+          PY
