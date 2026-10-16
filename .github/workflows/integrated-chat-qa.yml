@@ -1,0 +1,44 @@
+name: Integrated Chat QA
+
+on:
+  push:
+    branches:
+      - main
+      - 'test/**'
+      - 'feature/**'
+      - 'fix/**'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Search v2 regression
+        run: python tests/run_search_v2_qa.py
+
+      - name: Participation / FAQ / recommendation regression
+        run: python tests/run_participation_qa.py
+
+      - name: Conversation router regression
+        run: python tests/run_conversation_router_qa.py
+
+      - name: Semantic command regression
+        run: python tests/run_command_semantic_qa.py
+
+      - name: Integrated 100-case acceptance gate
+        run: python tests/run_integrated_chat_qa.py
