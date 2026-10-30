@@ -21,7 +21,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: ryotamatsuki/japanese-meeting-transcriber-colab
-          ref: 033b7232e95f1d14ab975db686f8e336670777fe
+          ref: 5d752c3903169a68e8e9f58b10fc4e7672c01c36
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
