@@ -1,10 +1,5 @@
 name: v0.1 isolated Modal private beta diarization-on E2E
 on:
-  push:
-    branches:
-      - eval/meeting-transcriber-stage1-20261030
-    paths:
-      - .github/workflows/modal-deploy.yml
   workflow_dispatch:
 permissions:
   contents: read
