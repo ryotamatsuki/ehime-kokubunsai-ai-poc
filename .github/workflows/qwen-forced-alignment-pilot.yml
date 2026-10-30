@@ -98,6 +98,8 @@ jobs:
             'median_cpcer_percent':statistics.median(x['qwen_attributed_cpcer_percent'] for x in result) if result else None}
           Path('local_runs/qwen-bridge-summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2))
           print('QWEN_BRIDGE_METRICS_ONLY',json.dumps({k:v for k,v in summary.items() if k!='per_record'},ensure_ascii=False))
+          if len(result)!=2 or failures:
+              raise SystemExit('Incomplete Qwen/Community1 forced-alignment pilot: do not report PASS')
           PY
       - name: Preserve numbers only
         if: always()
