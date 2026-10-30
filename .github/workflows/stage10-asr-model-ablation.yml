@@ -1,8 +1,5 @@
 name: Stage10 Japanese ASR 3x3 model-beam paired CER study
 on:
-  push:
-    branches: [eval/meeting-transcriber-stage1-20261030]
-    paths: [.github/workflows/stage10-asr-model-ablation.yml]
   workflow_dispatch:
 permissions:
   contents: read
