@@ -1,0 +1,41 @@
+name: Stage35 verify current Modal billing summary read-only
+on:
+  push:
+    branches: [eval/meeting-transcriber-stage1-20261030]
+    paths: [.github/workflows/transcriber-stage35-modal-billing-read.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    environment: ehime-kokubunsai-ai-poc
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Check billable usage but do not log amounts or mutate budget
+        run: |
+          set -euo pipefail
+          test -n "$MODAL_TOKEN_ID" && test -n "$MODAL_TOKEN_SECRET"
+          python -m pip install modal==1.6.3
+          python - <<'PY'
+          import decimal
+          import modal
+          summary = modal.Workspace.from_context().billing.summary(cycle='this month')
+          for key in ('billed_cost','metered_cost'):
+              value=getattr(summary,key)
+              if not isinstance(value,decimal.Decimal) or not value.is_finite():
+                  raise RuntimeError('Billing API numeric value invalid')
+          # No amounts, credit balances, token IDs, or workspaces in Actions logs.
+          print('STAGE35_LIVE_MODAL_BILLING_SUMMARY_READ_SUCCESS')
+          print('LIVE_BUDGET_AMOUNT_NOT_AVAILABLE_VIA_VERIFIED_READ_PATH')
+          print('BUDGET_SPEND_LIMIT_AND_ALERTS_REQUIRE_OWNER_DASHBOARD_CHECK')
+          PY
