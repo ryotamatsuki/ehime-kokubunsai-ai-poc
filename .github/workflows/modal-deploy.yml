@@ -1,4 +1,4 @@
-name: AMI second-window quality holdout benchmark
+name: AMI holdout oracle speaker-count 3 comparison
 on:
   push:
     branches:
@@ -59,7 +59,7 @@ jobs:
       - name: Real A10 Community-1 plus conservative 100ms cleanup
         run: |
           set -o pipefail
-          timeout --signal=TERM --kill-after=30s 420s python -m modal run modal_app.py --stage diarization --expected-speakers 4 --quality-experiment --speaker-cleanup-ms 100 --audio local_audio/ami_420_480.wav --output local_runs/ami-diar 2>&1 | tee local_runs/ami-diar.log
+          timeout --signal=TERM --kill-after=30s 420s python -m modal run modal_app.py --stage diarization --expected-speakers 3 --quality-experiment --speaker-cleanup-ms 100 --audio local_audio/ami_420_480.wav --output local_runs/ami-diar 2>&1 | tee local_runs/ami-diar.log
           python scripts/validate_evidence.py local_runs/ami-diar/evidence.json --stage diarization --expected-gpu A10
           python scripts/validate_run.py local_runs/ami-diar/run-1.zip --stage diarization
       - name: Score strict reference DER and JER, before and after postprocessing
