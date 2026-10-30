@@ -1,8 +1,5 @@
 name: Compare Community-1 overlap vs exclusive on 10 Japanese dialogues
 on:
-  push:
-    branches: [eval/meeting-transcriber-stage1-20261030]
-    paths: [.github/workflows/compare-diarization-modes.yml]
   workflow_dispatch:
 permissions:
   contents: read
