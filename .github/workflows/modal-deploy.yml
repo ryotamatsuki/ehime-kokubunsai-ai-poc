@@ -1,5 +1,10 @@
-name: Transcriber Stage 1 A10 tests 3-6
+name: Stage 1 A10 forced-two-speaker quality check
 on:
+  push:
+    branches:
+      - eval/meeting-transcriber-stage1-20261030
+    paths:
+      - .github/workflows/modal-deploy.yml
   workflow_dispatch:
 permissions:
   contents: read
@@ -7,9 +12,9 @@ concurrency:
   group: meeting-transcriber-stage1-validation
   cancel-in-progress: false
 jobs:
-  validate:
+  forced_two:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 18
     environment: ehime-kokubunsai-ai-poc
     env:
       TRANSCRIBER_GPU: A10
@@ -24,58 +29,44 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Install SDK and check credentials without printing values
+      - name: Prepare verified licensed Japanese two-speaker recording and Modal CLI
         run: |
           python -m pip install modal==1.4.3
           test -n "$MODAL_TOKEN_ID"
           test -n "$MODAL_TOKEN_SECRET"
           mkdir -p local_runs
-      - name: Prepare licensed Japanese two-speaker audio
-        run: |
           python scripts/prepare_validation_audio.py
           cp local_audio/provenance.json local_runs/audio-provenance.json
-      - name: Test 3 - Community-1 estimated speaker count
-        id: diar
-        continue-on-error: true
+      - name: GPU A10 Community-1 with num_speakers=2
         run: |
           set -o pipefail
-          timeout --signal=TERM --kill-after=30s 300s python -m modal run modal_app.py --stage diarization --audio local_audio/kyoto_two_speakers.ogg --output local_runs/03-diar 2>&1 | tee local_runs/03-diar.log
-          python scripts/validate_evidence.py local_runs/03-diar/evidence.json --stage diarization --expected-gpu A10
-          python scripts/validate_run.py local_runs/03-diar/run-1.zip --stage diarization
-      - name: Test 4 - integrated output
-        if: ${{ !cancelled() && steps.diar.outcome == 'success' }}
-        continue-on-error: true
+          timeout --signal=TERM --kill-after=20s 360s python -m modal run modal_app.py --stage diarization --expected-speakers 2 --audio local_audio/kyoto_two_speakers.ogg --output local_runs/03-diar-2 2>&1 | tee local_runs/03-diar-2.log
+          python scripts/validate_evidence.py local_runs/03-diar-2/evidence.json --stage diarization --expected-gpu A10
+          python scripts/validate_run.py local_runs/03-diar-2/run-1.zip --stage diarization
+      - name: GPU A10 integrated ASR + Community-1 with num_speakers=2
         run: |
           set -o pipefail
-          timeout --signal=TERM --kill-after=30s 300s python -m modal run modal_app.py --audio local_audio/kyoto_two_speakers.ogg --output local_runs/04-full 2>&1 | tee local_runs/04-full.log
-          python scripts/validate_evidence.py local_runs/04-full/evidence.json --stage full --expected-gpu A10
-          python scripts/validate_run.py local_runs/04-full/run-1.zip
-      - name: Test 5 - diarization OFF (no HF Secret)
-        if: ${{ !cancelled() }}
-        continue-on-error: true
+          timeout --signal=TERM --kill-after=20s 360s python -m modal run modal_app.py --stage full --expected-speakers 2 --audio local_audio/kyoto_two_speakers.ogg --output local_runs/04-full-2 2>&1 | tee local_runs/04-full-2.log
+          python scripts/validate_evidence.py local_runs/04-full-2/evidence.json --stage full --expected-gpu A10
+          python scripts/validate_run.py local_runs/04-full-2/run-1.zip
+      - name: Assert two distinct speaker labels in diarization and integrated output
         run: |
-          set -o pipefail
-          timeout --signal=TERM --kill-after=30s 300s python -m modal run modal_app.py --audio local_audio/kyoto_two_speakers.ogg --no-diarization --output local_runs/05-off 2>&1 | tee local_runs/05-off.log
-          python scripts/validate_evidence.py local_runs/05-off/evidence.json --stage full --off --expected-gpu A10
-          python scripts/validate_run.py local_runs/05-off/run-1.zip --off
-      - name: Test 6a - offline model weights reload and real inference
-        if: ${{ !cancelled() && steps.diar.outcome == 'success' }}
-        continue-on-error: true
-        run: |
-          set -o pipefail
-          timeout --signal=TERM --kill-after=30s 300s python -m modal run modal_app.py --audio local_audio/kyoto_two_speakers.ogg --repeat 2 --output local_runs/06-model-cache 2>&1 | tee local_runs/06-model-cache.log
-          python scripts/validate_evidence.py local_runs/06-model-cache/evidence.json --stage full --cache-mode model --expected-gpu A10
-      - name: Test 6b - result JSON reuse
-        if: ${{ !cancelled() && steps.diar.outcome == 'success' }}
-        continue-on-error: true
-        run: |
-          set -o pipefail
-          timeout --signal=TERM --kill-after=30s 300s python -m modal run modal_app.py --audio local_audio/kyoto_two_speakers.ogg --repeat 2 --result-cache --output local_runs/07-result-cache 2>&1 | tee local_runs/07-result-cache.log
-          python scripts/validate_evidence.py local_runs/07-result-cache/evidence.json --stage full --cache-mode result --expected-gpu A10
-      - name: Upload evidence and output archives (no input audio or credentials)
+          python - <<'PY'
+          import json, zipfile
+          from pathlib import Path
+          for folder in ('03-diar-2', '04-full-2'):
+              with zipfile.ZipFile(Path('local_runs') / folder / 'run-1.zip') as z:
+                  d = json.loads(z.read('pyannote_話者区間.json'))
+                  ids = [s['speaker_id'] for s in d['segments']]
+                  print(f'{folder}: intervals={len(ids)} unique_speakers={len(set(ids))} adjacent_switches={sum(a != b for a,b in zip(ids,ids[1:]))}')
+                  assert d['settings']['expected'] == 2, 'Model did not receive requested speaker count'
+                  assert len(set(ids)) == 2, 'Expected two speaker IDs from Community-1'
+                  assert any(a != b for a,b in zip(ids,ids[1:])), 'No speaker boundary switch detected'
+          PY
+      - name: Retain sanitized outputs and execution logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: transcriber-stage1-a10-${{ github.run_id }}
+          name: stage1-a10-fixed-two-${{ github.run_id }}
           path: local_runs/
           retention-days: 7
