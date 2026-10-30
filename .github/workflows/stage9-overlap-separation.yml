@@ -1,8 +1,5 @@
 name: Stage9 A10 Japanese overlap separation and re-ASR feasibility pilot
 on:
-  push:
-    branches: [eval/meeting-transcriber-stage1-20261030]
-    paths: [.github/workflows/stage9-overlap-separation.yml]
   workflow_dispatch:
 permissions:
   contents: read
