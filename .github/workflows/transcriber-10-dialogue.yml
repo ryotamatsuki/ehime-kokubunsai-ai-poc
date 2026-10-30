@@ -1,8 +1,5 @@
 name: Japanese transcriber 10 independent dialogue acceptance benchmark
 on:
-  push:
-    branches: [eval/meeting-transcriber-stage1-20261030]
-    paths: [.github/workflows/transcriber-10-dialogue.yml]
   workflow_dispatch:
 permissions:
   contents: read
