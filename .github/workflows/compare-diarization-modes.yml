@@ -1,0 +1,125 @@
+name: Compare Community-1 overlap vs exclusive on 10 Japanese dialogues
+on:
+  push:
+    branches: [eval/meeting-transcriber-stage1-20261030]
+    paths: [.github/workflows/compare-diarization-modes.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: meeting-transcriber-stage1-validation
+  cancel-in-progress: false
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 48
+    environment: ehime-kokubunsai-ai-poc
+    env:
+      TRANSCRIBER_GPU: A10
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ryotamatsuki/japanese-meeting-transcriber-colab
+          ref: bb9e870d26736bc97afd68f77e9e05fa3a9a0307
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install pinned benchmark dependencies
+        run: |
+          python -m pip install modal==1.4.3 pyannote.metrics==4.1 imageio-ffmpeg==0.6.0
+          test -n "$MODAL_TOKEN_ID" && test -n "$MODAL_TOKEN_SECRET"
+          python -m unittest tests.test_eval_elan tests.test_reference_overlap -v
+      - name: Evaluate exclusive and regular overlapping speaker segments on 10 dialogues
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p local_audio local_runs
+          export HF_HUB_DISABLE_TELEMETRY=1
+          FFMPEG="$(python -c 'import imageio_ffmpeg;print(imageio_ffmpeg.get_ffmpeg_exe())')"
+          for n in 01 02 03 04 05 06 07 08 09 10; do
+            echo "DATASET_SAMPLE_START $n"
+            root="https://huggingface.co/datasets/IngCrowd/japanese-themed-dialogue/resolve/main/japanese-themed-dialogue${n}/japanese-themed-dialogue${n}"
+            curl -fLsS --retry 3 --connect-timeout 25 --max-time 180 --output "local_audio/${n}.eaf" "${root}.eaf?download=true"
+            curl -fLsS --retry 3 --connect-timeout 25 --max-time 240 --output "local_audio/${n}.wav" "${root}_audio.wav?download=true"
+            test "$(wc -c < local_audio/${n}.wav)" -gt 5000000
+            "$FFMPEG" -hide_banner -loglevel error -nostdin -y -i "local_audio/${n}.wav" -ac 1 -ar 16000 -b:a 48k "local_audio/${n}.mp3"
+            rm "local_audio/${n}.wav"
+            set +e
+            timeout --signal=TERM --kill-after=30s 450s python -m modal run modal_app.py --stage diarization --quality-experiment --expected-speakers 2 --audio "local_audio/${n}.mp3" --output "local_runs/${n}" > "/tmp/transcriber-${n}.log" 2>&1
+            rc=$?
+            set -e
+            if [ "$rc" -ne 0 ]; then
+              echo "GPU_SAMPLE_FAILURE ${n} exit=${rc}"
+              printf '{"id":"%s","success":false,"stage":"gpu","returncode":%s}\n' "$n" "$rc" > "local_runs/${n}-failure.json"
+            else
+              python scripts/validate_evidence.py "local_runs/${n}/evidence.json" --stage diarization --expected-gpu A10 >/dev/null
+              python -m scripts.evaluate_diarization_modes --eaf "local_audio/${n}.eaf" --zip "local_runs/${n}/run-1.zip" --output "local_runs/${n}-score.json"
+              python - "${n}" <<'PY'
+          import json,sys,pathlib
+          p=pathlib.Path('local_runs')/sys.argv[1]/'evidence.json'
+          e=json.loads(p.read_text())
+          score=pathlib.Path('local_runs')/(sys.argv[1]+'-score.json')
+          v=json.loads(score.read_text())
+          v['gpu_pipeline_seconds']=e['runs'][0].get('pipeline_seconds')
+          score.write_text(json.dumps(v,ensure_ascii=False,indent=2))
+          PY
+              echo "GPU_SAMPLE_PASS $n"
+            fi
+            rm -f "local_audio/${n}.eaf" "local_audio/${n}.mp3"
+          done
+          python - <<'PY'
+          from pathlib import Path
+          import json,statistics
+          scores=sorted(Path('local_runs').glob('??-score.json'))
+          failures=sorted(Path('local_runs').glob('??-failure.json'))
+          rows=[{'id':p.name[:2],**json.loads(p.read_text())} for p in scores]
+          med=lambda mode,key:statistics.median(r[mode][key] for r in rows) if rows else None
+          components=['missed_detection_seconds','false_alarm_seconds','speaker_confusion_seconds']
+          aggregate={'dataset':'IngCrowd/japanese-themed-dialogue',
+                     'license':'CC BY-NC 4.0 noncommercial evaluation only',
+                     'recordings_completed':len(rows),
+                     'failed_ids':[x.name[:2] for x in failures],
+                     'all_10_completed':len(rows)==10 and not failures,
+                     'ref_sha256':{r['id']:r['reference_eaf_sha256'] for r in rows},
+                     'conditions':'same Community-1 A10, speaker count fixed at 2; collar=0, skip_overlap=false',
+                     'per_record':[{'id':r['id'],
+                                   'ex_der':r['exclusive']['der_percent'],
+                                   'regular_der':r['regular']['der_percent'],
+                                   'ex_jer':r['exclusive']['jer_percent'],
+                                   'regular_jer':r['regular']['jer_percent'],
+                                   'ex_miss':r['exclusive']['missed_detection_seconds'],
+                                   'regular_miss':r['regular']['missed_detection_seconds'],
+                                   'ex_false_alarm':r['exclusive']['false_alarm_seconds'],
+                                   'regular_false_alarm':r['regular']['false_alarm_seconds'],
+                                   'ex_confusion':r['exclusive']['speaker_confusion_seconds'],
+                                   'regular_confusion':r['regular']['speaker_confusion_seconds'],
+                                   'reference_speaker_seconds':r['reference_overlap_floor']['reference_speaker_seconds'],
+                                   'reference_overlap_excess_seconds':r['reference_overlap_floor']['overlap_excess_speaker_seconds']}
+                                  for r in rows]}
+          if rows:
+              for mode in ['exclusive','regular']:
+                  aggregate[mode+'_median_der_pct']=med(mode,'der_percent')
+                  aggregate[mode+'_median_jer_pct']=med(mode,'jer_percent')
+                  for component in components:
+                      aggregate[mode+'_total_'+component]=sum(r[mode][component] for r in rows)
+                  aggregate[mode+'_micro_der_pct']=100*sum(sum(r[mode][key] for key in components) for r in rows)/sum(r['reference_overlap_floor']['reference_speaker_seconds'] for r in rows)
+              aggregate['regular_better_der_count']=sum(r['regular']['der_percent']<r['exclusive']['der_percent'] for r in rows)
+              aggregate['regular_worse_der_count']=sum(r['regular']['der_percent']>r['exclusive']['der_percent'] for r in rows)
+              aggregate['regular_better_jer_count']=sum(r['regular']['jer_percent']<r['exclusive']['jer_percent'] for r in rows)
+          Path('local_runs/mode-comparison-summary.json').write_text(json.dumps(aggregate,ensure_ascii=False,indent=2))
+          print('MODE_COMPARISON_METRICS_ONLY',json.dumps({k:v for k,v in aggregate.items() if k not in ('per_record','ref_sha256')},ensure_ascii=False))
+          PY
+      - name: Preserve metrics ONLY (no original audio, ELAN transcripts or raw model text)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: community1-regular-vs-exclusive-10-${{ github.run_id }}
+          path: |
+            local_runs/mode-comparison-summary.json
+            local_runs/??-score.json
+            local_runs/??-failure.json
+          if-no-files-found: warn
+          retention-days: 7
