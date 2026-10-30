@@ -1,0 +1,61 @@
+name: Japanese ELAN overlap-error floor diagnostic (CPU only)
+on:
+  push:
+    branches: [eval/meeting-transcriber-stage1-20261030]
+    paths: [.github/workflows/reference-overlap-10.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  overlap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ryotamatsuki/japanese-meeting-transcriber-colab
+          ref: bfbd98aabe30a07fb35ec5dcf35569761f858781
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Verify reference overlap mathematics
+        run: python -m unittest tests.test_reference_overlap tests.test_eval_elan -v
+      - name: Calculate per-file strict DER floor under single-speaker-exclusive output
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p local_runs
+          for n in 01 02 03 04 05 06 07 08 09 10; do
+            url="https://huggingface.co/datasets/IngCrowd/japanese-themed-dialogue/resolve/main/japanese-themed-dialogue${n}/japanese-themed-dialogue${n}.eaf?download=true"
+            curl -fLsS --retry 3 --connect-timeout 20 --max-time 150 --output "/tmp/${n}.eaf" "$url"
+            python -m scripts.analyze_reference_overlap --eaf "/tmp/${n}.eaf" --output "local_runs/${n}-overlap.json"
+            rm -f "/tmp/${n}.eaf"
+          done
+          python - <<'PY'
+          import json,statistics
+          from pathlib import Path
+          rows=[]
+          for path in sorted(Path('local_runs').glob('??-overlap.json')):
+              r=json.loads(path.read_text())
+              rows.append({'id':path.name[:2],**r})
+          total=sum(r['reference_speaker_seconds'] for r in rows)
+          overlap=sum(r['overlap_excess_speaker_seconds'] for r in rows)
+          summary={'source':'IngCrowd/japanese-themed-dialogue',
+                   'license':'CC BY-NC 4.0; noncommercial research only',
+                   'recordings':len(rows),'total_speaker_seconds':total,
+                   'total_overlap_excess_speaker_seconds':overlap,
+                   'exclusive_der_floor_micro_percent':100*overlap/total,
+                   'median_exclusive_der_floor_percent':statistics.median(r['exclusive_diarization_der_floor_percent'] for r in rows),
+                   'reference_only_not_model_accuracy':True,
+                   'per_record':rows}
+          assert len(rows)==10
+          Path('local_runs/reference-overlap-summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2))
+          print('HUMAN_REFERENCE_OVERLAP_SUMMARY',json.dumps({'recordings':len(rows),'total_overlap_seconds':overlap,'exclusive_der_floor_micro_percent':summary['exclusive_der_floor_micro_percent']}))
+          PY
+      - name: Publish numeric metrics and source SHA256 only
+        uses: actions/upload-artifact@v4
+        with:
+          name: reference-overlap-10-ELAN-${{ github.run_id }}
+          path: local_runs/reference-overlap-summary.json
+          retention-days: 7
