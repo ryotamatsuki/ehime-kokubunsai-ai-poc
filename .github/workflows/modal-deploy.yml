@@ -31,12 +31,13 @@ jobs:
           python-version: '3.11'
       - name: Prepare public AMI one-minute meeting excerpt and human RTTM reference
         run: |
-          python -m pip install modal==1.4.3 pyannote.metrics==4.1
+          python -m pip install modal==1.4.3 pyannote.metrics==4.1 imageio-ffmpeg==0.6.0
           test -n "$MODAL_TOKEN_ID"
           test -n "$MODAL_TOKEN_SECRET"
           mkdir -p local_audio local_runs
           curl --retry 2 --connect-timeout 20 --max-time 150 -fLsS -o local_audio/full-ami.wav 'https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/ES2004a/audio/ES2004a.Mix-Headset.wav'
-          ffmpeg -hide_banner -loglevel error -nostdin -y -ss 300 -t 60 -i local_audio/full-ami.wav -ac 1 -ar 16000 -c:a pcm_s16le local_audio/ami_300_360.wav
+          FFMPEG="$(python -c 'import imageio_ffmpeg;print(imageio_ffmpeg.get_ffmpeg_exe())')"
+          "$FFMPEG" -hide_banner -loglevel error -nostdin -y -ss 300 -t 60 -i local_audio/full-ami.wav -ac 1 -ar 16000 -c:a pcm_s16le local_audio/ami_300_360.wav
           rm local_audio/full-ami.wav
           python - <<'PY'
           import urllib.request, pathlib
