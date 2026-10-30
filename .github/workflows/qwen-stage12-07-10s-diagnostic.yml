@@ -1,0 +1,118 @@
+name: Stage12 07 ten-second alignment diagnostic
+on:
+  push:
+    branches: [eval/meeting-transcriber-stage1-20261030]
+    paths: [.github/workflows/qwen-stage12-07-10s-diagnostic.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: transcriber-qwen-07-diagnostic-a10
+  cancel-in-progress: false
+jobs:
+  integrated:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: ehime-kokubunsai-ai-poc
+    env:
+      TRANSCRIBER_GPU: A10
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ryotamatsuki/japanese-meeting-transcriber-colab
+          ref: 41e2201e8125f5da71f500f73f819e8c3e41a540
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install evaluation CLI and test timing bridge
+        run: |
+          set -euo pipefail
+          python -m pip install modal==1.4.3 imageio-ffmpeg==0.6.0 rapidfuzz==3.14.3
+          python -m unittest tests.test_qwen_timing_bridge -v
+          test -n "$MODAL_TOKEN_ID" && test -n "$MODAL_TOKEN_SECRET"
+          mkdir -p local_audio local_runs
+      - name: Compare Qwen timestamped Japanese speaker-attributed transcript against ELAN
+        shell: bash
+        run: |
+          set -euo pipefail
+          trap 'rm -f local_runs/*-private.json local_audio/* local_runs/*/run-*.zip' EXIT
+          FFMPEG="$(python -c 'import imageio_ffmpeg;print(imageio_ffmpeg.get_ffmpeg_exe())')"
+          for n in 07; do
+            echo "QWEN_TIMESTAMP_TRIAL_START $n"
+            root="https://huggingface.co/datasets/IngCrowd/japanese-themed-dialogue/resolve/main/japanese-themed-dialogue${n}/japanese-themed-dialogue${n}"
+            curl -fLsS --retry 3 --connect-timeout 25 --max-time 180 -o "local_audio/${n}.eaf" "${root}.eaf?download=true"
+            curl -fLsS --retry 3 --connect-timeout 25 --max-time 240 -o "local_audio/${n}.wav" "${root}_audio.wav?download=true"
+            "$FFMPEG" -hide_banner -loglevel error -nostdin -y -i "local_audio/${n}.wav" -ar 16000 -ac 1 -b:a 48k "local_audio/${n}.mp3"
+            rm -f "local_audio/${n}.wav"
+            set +e
+            timeout --signal=TERM --kill-after=20s 700s python -m modal run modal_stage11_qwen_alignment.py --audio "local_audio/${n}.mp3" --output "local_runs/${n}-private.json" --chunk-seconds 10 >/tmp/qwen-alignment.log 2>&1
+            rc=$?
+            set -e
+            if [ "$rc" -ne 0 ]; then
+              echo "QWEN_ALIGNMENT_FAILURE id=$n exit=$rc"
+              grep 'QWEN_ALIGNMENT_NUMERIC_DIAGNOSTIC' /tmp/qwen-alignment.log | tail -n 3 || true
+              printf '{"id":"%s","stage":"alignment","exit_code":%s}\n' "$n" "$rc" > "local_runs/${n}-failure.json"
+              tail -n 14 /tmp/qwen-alignment.log | cut -c1-190
+              rm -f "local_audio/${n}.mp3" "local_audio/${n}.eaf" "local_runs/${n}-private.json"
+              continue
+            fi
+            set +e
+            timeout --signal=TERM --kill-after=20s 550s python -m modal run modal_app.py --stage diarization --expected-speakers 2 --audio "local_audio/${n}.mp3" --output "local_runs/${n}-diar" >/tmp/qwen-diar.log 2>&1
+            rc=$?
+            set -e
+            if [ "$rc" -ne 0 ]; then
+              echo "COMMUNITY1_FAILURE id=$n exit=$rc"
+              printf '{"id":"%s","stage":"diarization","exit_code":%s}\n' "$n" "$rc" > "local_runs/${n}-failure.json"
+              tail -n 10 /tmp/qwen-diar.log | cut -c1-190
+              rm -f "local_audio/${n}.mp3" "local_audio/${n}.eaf" "local_runs/${n}-private.json"
+              continue
+            fi
+            set +e
+            python -m scripts.evaluate_qwen_attributed_bridge \
+              --eaf "local_audio/${n}.eaf" \
+              --qwen-private "local_runs/${n}-private.json" \
+              --diar-zip "local_runs/${n}-diar/run-1.zip" \
+              --output "local_runs/${n}-score.json" >/tmp/qwen-bridge.log 2>&1
+            rc=$?
+            set -e
+            if [ "$rc" -ne 0 ]; then
+              echo "QWEN_CP_CER_EVAL_FAILURE id=$n exit=$rc"
+              printf '{"id":"%s","stage":"bridge","exit_code":%s}\n' "$n" "$rc" > "local_runs/${n}-failure.json"
+              tail -n 12 /tmp/qwen-bridge.log | cut -c1-180
+            else
+              echo "QWEN_TIMESTAMP_TRIAL_PASS $n"
+            fi
+            rm -f "local_audio/${n}.mp3" "local_audio/${n}.eaf" "local_runs/${n}-private.json"
+            rm -rf "local_runs/${n}-diar"
+          done
+          python - <<'PY'
+          from pathlib import Path
+          import json,statistics
+          result=[json.loads(p.read_text()) for p in sorted(Path('local_runs').glob('??-score.json'))]
+          failures=[json.loads(p.read_text()) for p in sorted(Path('local_runs').glob('??-failure.json'))]
+          summary={'attempted':1,'complete':len(result),'failed':failures,
+            'human_reference':'IngCrowd Japanese 2-speaker ELAN, CC BY-NC 4.0; noncommercial evaluation',
+            'models':['Qwen/Qwen3-ASR-1.7B','Qwen/Qwen3-ForcedAligner-0.6B',
+                      'pyannote/speaker-diarization-community-1'],
+            'no_web_or_production_code_changes':True,
+            'per_record':result,
+            'median_cpcer_percent':statistics.median(x['qwen_attributed_cpcer_percent'] for x in result) if result else None}
+          Path('local_runs/qwen-bridge-summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2))
+          print('QWEN_BRIDGE_METRICS_ONLY',json.dumps({k:v for k,v in summary.items() if k!='per_record'},ensure_ascii=False))
+          if len(result)!=1 or failures:
+              raise SystemExit('Incomplete Stage12 targeted recovery: do not report PASS')
+          PY
+      - name: Preserve numbers only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qwen-stage12-07-10s-${{ github.run_id }}
+          path: |
+            local_runs/qwen-bridge-summary.json
+            local_runs/??-score.json
+            local_runs/??-failure.json
+          if-no-files-found: warn
+          retention-days: 7
