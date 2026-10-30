@@ -1,8 +1,5 @@
 name: Transcriber v0.1 one-hour synthetic smoke A10
 on:
-  push:
-    branches: [eval/meeting-transcriber-stage1-20261030]
-    paths: [.github/workflows/modal-deploy.yml]
   workflow_dispatch:
 permissions:
   contents: read
