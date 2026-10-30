@@ -1,8 +1,5 @@
 name: Stage10 Qwen3-ASR Japanese full ten-dialogue validation
 on:
-  push:
-    branches: [eval/meeting-transcriber-stage1-20261030]
-    paths: [.github/workflows/stage10-qwen-10.yml]
   workflow_dispatch:
 permissions:
   contents: read
