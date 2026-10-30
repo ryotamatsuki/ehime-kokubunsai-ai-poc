@@ -1,0 +1,43 @@
+name: Stage31 inspect free Japanese natural 3-4 speaker audio dataset
+on:
+  push:
+    branches: [eval/meeting-transcriber-stage1-20261030]
+    paths: [.github/workflows/transcriber-stage31-basis-discovery.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Inspect public Japanese metadata (no audio/transcripts published)
+        run: |
+          python - <<'PY'
+          import urllib.request, json, collections, pathlib
+          root='https://huggingface.co/datasets/basis-ai/basis-conversations-1500/resolve/main/'
+          info=json.load(urllib.request.urlopen(root+'dataset_info.json',timeout=65))
+          print('DATASET_INFO_KEYS',sorted(info))
+          data=urllib.request.urlopen(root+'ja/segments.jsonl',timeout=85)
+          counts=collections.Counter()
+          pick=[]
+          for raw in data:
+              if not raw.strip():continue
+              item=json.loads(raw)
+              keylist=sorted(item)
+              if len(pick)==0: print('FIELDS',keylist)
+              tracks=item.get('speakers',[])
+              n=len(tracks) if isinstance(tracks,list) else 0
+              duration=float(item.get('duration') or item.get('duration_seconds') or 0)
+              counts[n]+=1
+              if n in (3,4) and duration>90 and len(pick)<9:
+                  fields=[]
+                  for t in tracks[:1]:
+                      fields.append({k:(type(v).__name__ if k!='audio' else str(v)[:200]) for k,v in t.items()})
+                  pick.append({'speaker_count':n,'duration':round(duration,1),
+                      'keys':keylist,'speaker_fields':fields,
+                      'segment_id':str(item.get('segment_id',item.get('id','')))[:90]})
+          print('SPEAKER_COUNTS',dict(counts))
+          print('CANDIDATES',json.dumps(pick,ensure_ascii=False))
+          assert pick,'No freely downloadable Japanese 3/4-speaker segment located'
+          PY
