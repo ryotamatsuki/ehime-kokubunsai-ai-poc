@@ -1,0 +1,63 @@
+name: Stage36 real isolated Modal retention integration
+on:
+  push:
+    branches: [eval/meeting-transcriber-stage1-20261030]
+    paths: [.github/workflows/transcriber-stage36-retention-integration.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: stage36-isolated-retention
+  cancel-in-progress: false
+jobs:
+  retention:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: ehime-kokubunsai-ai-poc
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+      STAGE36_RUN_ID: ${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ryotamatsuki/japanese-meeting-transcriber-colab
+          ref: 7cc9cd92a8fa4f5d117e778eefe0861f1a2cb4d8
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Check isolated CPU Modal Volume and Dict TTL deletion
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$MODAL_TOKEN_ID" && test -n "$MODAL_TOKEN_SECRET"
+          python -m pip install modal==1.6.3
+          en="stage36-retention-${GITHUB_RUN_ID}"
+          v="stage36-retention-${GITHUB_RUN_ID}"
+          d="stage36-retention-state-${GITHUB_RUN_ID}"
+          made=0
+          cleanup() {
+            status=$?
+            trap - EXIT
+            set +e
+            if [[ "$made" == 1 ]]; then
+              modal dict delete -y --allow-missing -e "$en" "$d"
+              dr=$?
+              modal volume delete -y --allow-missing -e "$en" "$v"
+              vr=$?
+              modal environment delete -y "$en"
+              er=$?
+              if [[ $dr != 0 || $vr != 0 || $er != 0 ]]; then
+                echo "STAGE36_ISOLATED_RESOURCE_CLEANUP_FAILED"
+                status=1
+              else
+                echo "STAGE36_ISOLATED_RESOURCE_CLEANUP_SUCCESS"
+              fi
+            fi
+            exit "$status"
+          }
+          trap cleanup EXIT
+          modal environment create "$en"
+          made=1
+          timeout --signal=TERM --kill-after=10s 480s modal run -e "$en" scripts/modal_retention_stage36.py
