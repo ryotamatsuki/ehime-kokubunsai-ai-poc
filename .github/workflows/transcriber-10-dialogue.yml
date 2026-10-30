@@ -1,0 +1,109 @@
+name: Japanese transcriber 10 independent dialogue acceptance benchmark
+on:
+  push:
+    branches: [eval/meeting-transcriber-stage1-20261030]
+    paths: [.github/workflows/transcriber-10-dialogue.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: meeting-transcriber-stage1-validation
+  cancel-in-progress: false
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    environment: ehime-kokubunsai-ai-poc
+    env:
+      TRANSCRIBER_GPU: A10
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ryotamatsuki/japanese-meeting-transcriber-colab
+          ref: 591bc6742d9c749cdb1208532f2d581cd70492ac
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install pinned benchmark dependencies
+        run: |
+          python -m pip install modal==1.4.3 pyannote.metrics==4.1 imageio-ffmpeg==0.6.0
+          test -n "$MODAL_TOKEN_ID" && test -n "$MODAL_TOKEN_SECRET"
+          python -m unittest tests.test_eval_elan -v
+      - name: Evaluate 10 independent real Japanese dialogues with public human ELAN labels
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p local_audio local_runs
+          export HF_HUB_DISABLE_TELEMETRY=1
+          FFMPEG="$(python -c 'import imageio_ffmpeg;print(imageio_ffmpeg.get_ffmpeg_exe())')"
+          for n in 01 02 03 04 05 06 07 08 09 10; do
+            echo "DATASET_SAMPLE_START $n"
+            root="https://huggingface.co/datasets/IngCrowd/japanese-themed-dialogue/resolve/main/japanese-themed-dialogue${n}/japanese-themed-dialogue${n}"
+            curl -fLsS --retry 3 --connect-timeout 25 --max-time 180 --output "local_audio/${n}.eaf" "${root}.eaf?download=true"
+            curl -fLsS --retry 3 --connect-timeout 25 --max-time 240 --output "local_audio/${n}.wav" "${root}_audio.wav?download=true"
+            test "$(wc -c < local_audio/${n}.wav)" -gt 5000000
+            "$FFMPEG" -hide_banner -loglevel error -nostdin -y -i "local_audio/${n}.wav" -ac 1 -ar 16000 -b:a 48k "local_audio/${n}.mp3"
+            rm "local_audio/${n}.wav"
+            set +e
+            timeout --signal=TERM --kill-after=30s 450s python -m modal run modal_app.py --stage full --expected-speakers 2 --audio "local_audio/${n}.mp3" --output "local_runs/${n}" > "/tmp/transcriber-${n}.log" 2>&1
+            rc=$?
+            set -e
+            if [ "$rc" -ne 0 ]; then
+              echo "GPU_SAMPLE_FAILURE ${n} exit=${rc}"
+              printf '{"id":"%s","success":false,"stage":"gpu","returncode":%s}\n' "$n" "$rc" > "local_runs/${n}-failure.json"
+            else
+              python scripts/validate_evidence.py "local_runs/${n}/evidence.json" --stage full --expected-gpu A10 >/dev/null
+              python scripts/validate_run.py "local_runs/${n}/run-1.zip" >/dev/null
+              python -m scripts.eval_elan_ja --eaf "local_audio/${n}.eaf" --zip "local_runs/${n}/run-1.zip" --output "local_runs/${n}-score.json"
+              python - "${n}" <<'PY'
+          import json,sys,pathlib
+          p=pathlib.Path('local_runs')/sys.argv[1]/'evidence.json'
+          e=json.loads(p.read_text())
+          score=pathlib.Path('local_runs')/(sys.argv[1]+'-score.json')
+          v=json.loads(score.read_text())
+          v['audio_sha256']='recorded-in-local-synthetic-benchmark-provenance'
+          v['gpu_pipeline_seconds']=e['runs'][0].get('pipeline_seconds')
+          score.write_text(json.dumps(v,ensure_ascii=False,indent=2))
+          PY
+              echo "GPU_SAMPLE_PASS $n"
+            fi
+            rm -f "local_audio/${n}.eaf" "local_audio/${n}.mp3"
+          done
+          python - <<'PY'
+          from pathlib import Path
+          import json,statistics
+          scores=sorted(Path('local_runs').glob('??-score.json'))
+          failures=sorted(Path('local_runs').glob('??-failure.json'))
+          rows=[]
+          for p in scores:
+              v=json.loads(p.read_text())
+              rows.append({'id':p.name[:2], 'cer_percent':round(v['asr']['normalized_cer']*100,3),
+                           'der_percent':round(v['diarization']['der_percent'],3),
+                           'jer_percent':round(v['diarization']['jer_percent'],3),
+                           'pipeline_seconds':v['gpu_pipeline_seconds'],
+                           'reference_sha256':v['eaf_sha256']})
+          median=lambda key:round(statistics.median(x[key] for x in rows),3) if rows else None
+          d={'dataset':'IngCrowd/japanese-themed-dialogue',
+             'license':'CC BY-NC 4.0; noncommercial benchmark only',
+             'unique_recordings_evaluated':len(rows),'failed_ids':[p.name[:2] for p in failures],
+             'all_10_completed':len(rows)==10,'cer_median_percent':median('cer_percent'),
+             'der_median_percent':median('der_percent'),'jer_median_percent':median('jer_percent'),
+             'quality_gate_cer_15_and_der_30_pass':len(rows)==10 and median('cer_percent')<=15 and median('der_percent')<=30,
+             'details':rows,'notes':'Diarization oracle speaker count=2. Human ELAN turns. CER is text-order estimate, not cpCER. Public noncommercial themed dialogue, not government meeting.'}
+          Path('local_runs/acceptance-summary.json').write_text(json.dumps(d,ensure_ascii=False,indent=2))
+          print('ACCEPTANCE_SUMMARY',json.dumps(d,ensure_ascii=False))
+          PY
+      - name: Preserve metrics ONLY (no original audio, ELAN transcripts or raw model text)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: transcriber-ingcrowd-10-reference-metrics-${{ github.run_id }}
+          path: |
+            local_runs/acceptance-summary.json
+            local_runs/??-score.json
+            local_runs/??-failure.json
+          if-no-files-found: warn
+          retention-days: 7
