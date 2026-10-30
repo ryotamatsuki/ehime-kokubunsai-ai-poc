@@ -1,0 +1,83 @@
+name: Stage10 Qwen3-ASR Japanese full ten-dialogue validation
+on:
+  push:
+    branches: [eval/meeting-transcriber-stage1-20261030]
+    paths: [.github/workflows/stage10-qwen-10.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: meeting-transcriber-stage10-qwen-full10
+  cancel-in-progress: false
+jobs:
+  qwen:
+    runs-on: ubuntu-latest
+    timeout-minutes: 48
+    environment: ehime-kokubunsai-ai-poc
+    env:
+      TRANSCRIBER_GPU: A10
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ryotamatsuki/japanese-meeting-transcriber-colab
+          ref: 334ed7b6aa75bc0288917c69199da984ed0db4ea
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install research CLI dependencies
+        run: |
+          python -m pip install modal==1.4.3 imageio-ffmpeg==0.6.0
+          test -n "$MODAL_TOKEN_ID" && test -n "$MODAL_TOKEN_SECRET"
+          mkdir -p local_audio local_runs
+      - name: Evaluate Qwen3 on ten real Japanese mixed conversations without persisting speech
+        shell: bash
+        run: |
+          set -euo pipefail
+          FFMPEG="$(python -c 'import imageio_ffmpeg;print(imageio_ffmpeg.get_ffmpeg_exe())')"
+          for n in 01 02 03 04 05 06 07 08 09 10; do
+            root="https://huggingface.co/datasets/IngCrowd/japanese-themed-dialogue/resolve/main/japanese-themed-dialogue${n}/japanese-themed-dialogue${n}"
+            curl -fLsS --retry 3 --connect-timeout 25 --max-time 200 -o "local_audio/${n}.eaf" "${root}.eaf?download=true"
+            curl -fLsS --retry 3 --connect-timeout 25 --max-time 250 -o "local_audio/${n}.wav" "${root}_audio.wav?download=true"
+            "$FFMPEG" -hide_banner -loglevel error -nostdin -y -i "local_audio/${n}.wav" -ac 1 -ar 16000 -b:a 48k "local_audio/${n}.mp3"
+            rm -f "local_audio/${n}.wav"
+            echo "QWEN_RESEARCH_START $n"
+            set +e
+            timeout --signal=TERM --kill-after=20s 780s python -m modal run modal_stage10_qwen.py --audio "local_audio/${n}.mp3" --eaf "local_audio/${n}.eaf" --output "local_runs/${n}-qwen.json" --id "$n" >/tmp/stage10-qwen.log 2>&1
+            rc=$?
+            set -e
+            if [ "$rc" -ne 0 ]; then
+              echo "QWEN_RESEARCH_FAILURE id=$n exit=$rc"
+              printf '{"id":"%s","success":false,"exit_code":%s}\n' "$n" "$rc" > "local_runs/${n}-failure.json"
+              tail -n 8 /tmp/stage10-qwen.log | cut -c1-200
+            else
+              echo "QWEN_RESEARCH_PASS $n"
+            fi
+            rm -f "local_audio/${n}.mp3" "local_audio/${n}.eaf"
+          done
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          vals=[json.loads(f.read_text()) for f in sorted(Path('local_runs').glob('??-qwen.json'))]
+          errors=[json.loads(f.read_text()) for f in sorted(Path('local_runs').glob('??-failure.json'))]
+          result={'model':'Qwen/Qwen3-ASR-1.7B',
+             'attempted':10,'completed':len(vals),'failed':errors,
+             'metric':'flattened full-dialogue rough CER, same human IngCrowd EAF as Whisper candidates',
+             'license':'IngCrowd CC BY-NC 4.0 noncommercial',
+             'per_record':vals}
+          Path('local_runs/qwen-10-summary.json').write_text(json.dumps(result,ensure_ascii=False,indent=2))
+          print('QWEN_RESEARCH_METRICS_ONLY',json.dumps({k:v for k,v in result.items() if k!='per_record'}))
+          PY
+      - name: Save only numeric model comparisons
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stage10-qwen-japanese-10-${{ github.run_id }}
+          path: |
+            local_runs/qwen-pilot-summary.json
+            local_runs/??-qwen.json
+            local_runs/??-failure.json
+          if-no-files-found: warn
+          retention-days: 7
