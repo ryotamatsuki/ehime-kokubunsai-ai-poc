@@ -1,5 +1,10 @@
-name: AMI holdout oracle speaker-count 3 comparison
+name: Meeting ASR open-source-inspired A10 quality comparison
 on:
+  push:
+    branches:
+      - eval/meeting-transcriber-stage1-20261030
+    paths:
+      - .github/workflows/modal-deploy.yml
   workflow_dispatch:
 permissions:
   contents: read
@@ -7,9 +12,9 @@ concurrency:
   group: meeting-transcriber-stage1-validation
   cancel-in-progress: false
 jobs:
-  benchmark:
+  compare:
     runs-on: ubuntu-latest
-    timeout-minutes: 22
+    timeout-minutes: 25
     environment: ehime-kokubunsai-ai-poc
     env:
       TRANSCRIBER_GPU: A10
@@ -19,57 +24,60 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: ryotamatsuki/japanese-meeting-transcriber-colab
-          ref: f57f80e53d8517c645b4830863ca12eec3c565de
+          ref: acf5043c1bbd24d602c278c0491e56a063a8ba9f
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Prepare public AMI one-minute meeting excerpt and human RTTM reference
+      - name: Prepare public Japanese dialogue and community subtitles
         run: |
-          python -m pip install modal==1.4.3 pyannote.metrics==4.1 imageio-ffmpeg==0.6.0
-          test -n "$MODAL_TOKEN_ID"
-          test -n "$MODAL_TOKEN_SECRET"
-          mkdir -p local_audio local_runs
-          curl --retry 2 --connect-timeout 20 --max-time 150 -fLsS -o local_audio/full-ami.wav 'https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/ES2004a/audio/ES2004a.Mix-Headset.wav'
-          FFMPEG="$(python -c 'import imageio_ffmpeg;print(imageio_ffmpeg.get_ffmpeg_exe())')"
-          "$FFMPEG" -hide_banner -loglevel error -nostdin -y -ss 420 -t 60 -i local_audio/full-ami.wav -ac 1 -ar 16000 -c:a pcm_s16le local_audio/ami_420_480.wav
-          rm local_audio/full-ami.wav
+          python -m pip install modal==1.4.3
+          test -n "$MODAL_TOKEN_ID" && test -n "$MODAL_TOKEN_SECRET"
+          mkdir -p local_runs
+          python scripts/prepare_validation_audio.py
+          cp local_audio/provenance.json local_runs/audio-provenance.json
           python - <<'PY'
           import urllib.request, pathlib
-          url='https://raw.githubusercontent.com/pyannote/AMI-diarization-setup/main/only_words/rttms/test/ES2004a.rttm'
-          lines=urllib.request.urlopen(url,timeout=35).read().decode().splitlines()
-          reference=[]
-          for line in lines:
-              p=line.split()
-              if len(p)!=10 or p[0]!='SPEAKER':continue
-              s=float(p[3]);e=s+float(p[4])
-              a=max(s,420);b=min(e,480)
-              if b<=a:continue
-              p[3]=f'{a-420:.6f}';p[4]=f'{b-a:.6f}';p[1]='ami_420_480'
-              reference.append(' '.join(p))
-          assert len(reference)>8, 'Unexpected empty reference'
-          pathlib.Path('local_audio/ami_420_480.rttm').write_text('\n'.join(reference)+'\n')
-          print(f'AMI human-annotated only_words reference turns={len(reference)}, distinct speakers={len(set(x.split()[7] for x in reference))}')
+          url="https://commons.wikimedia.org/w/index.php?title=TimedText%3AKyoto_women_conversation_in_1964.ogg.ja.srt&action=raw"
+          req=urllib.request.Request(url,headers={'User-Agent':'JapaneseMeetingTranscriberEvaluation/1.0 (public open-source comparative research)'})
+          with urllib.request.urlopen(req,timeout=60) as r:
+              content=r.read(100000)
+          if b'-->' not in content or b'00:00:' not in content:
+              raise ValueError('Reference subtitles are not raw SRT; refusing CER evaluation')
+          pathlib.Path('local_audio/reference.srt').write_bytes(content)
+          print('Reference subtitles checked; no subtitles or audio will be committed')
           PY
-      - name: Real A10 Community-1 plus conservative 100ms cleanup
+      - name: A10 baseline beam5 with word-attribution review
         run: |
           set -o pipefail
-          timeout --signal=TERM --kill-after=30s 420s python -m modal run modal_app.py --stage diarization --expected-speakers 3 --quality-experiment --speaker-cleanup-ms 100 --audio local_audio/ami_420_480.wav --output local_runs/ami-diar 2>&1 | tee local_runs/ami-diar.log
-          python scripts/validate_evidence.py local_runs/ami-diar/evidence.json --stage diarization --expected-gpu A10
-          python scripts/validate_run.py local_runs/ami-diar/run-1.zip --stage diarization
-      - name: Score strict reference DER and JER, before and after postprocessing
+          timeout --signal=TERM --kill-after=30s 360s python -m modal run modal_app.py --stage full --expected-speakers 2 --quality-experiment --asr-beam-size 5 --audio local_audio/kyoto_two_speakers.ogg --output local_runs/asr-beam5 2>&1 | tee local_runs/asr-beam5.log
+          python scripts/validate_evidence.py local_runs/asr-beam5/evidence.json --stage full --expected-gpu A10
+          python scripts/validate_run.py local_runs/asr-beam5/run-1.zip
+      - name: A10 candidate beam8 with same model/audio
         run: |
           set -o pipefail
-          for mode in unmodified exclusive standard; do
-            python scripts/evaluate_diarization.py --rttm local_audio/ami_420_480.rttm --zip local_runs/ami-diar/run-1.zip --candidate "$mode" --collar 0 | tee "local_runs/score-${mode}.json"
-          done
-          python scripts/evaluate_diarization.py --rttm local_audio/ami_420_480.rttm --zip local_runs/ami-diar/run-1.zip --candidate exclusive --collar 0.25 | tee local_runs/score-exclusive-collar025.json
-      - name: Preserve results and official RTTM excerpt but not the audio signal
+          timeout --signal=TERM --kill-after=30s 360s python -m modal run modal_app.py --stage full --expected-speakers 2 --quality-experiment --asr-beam-size 8 --audio local_audio/kyoto_two_speakers.ogg --output local_runs/asr-beam8 2>&1 | tee local_runs/asr-beam8.log
+          python scripts/validate_evidence.py local_runs/asr-beam8/evidence.json --stage full --expected-gpu A10
+          python scripts/validate_run.py local_runs/asr-beam8/run-1.zip
+      - name: Evaluate normalized CER and review flags
+        run: |
+          python scripts/evaluate_asr_cer.py --reference-srt local_audio/reference.srt --baseline local_runs/asr-beam5/run-1.zip --candidate local_runs/asr-beam8/run-1.zip --output local_runs/cer-comparison.json
+          python - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile
+          import json
+          for mode in ('asr-beam5','asr-beam8'):
+              with ZipFile(Path('local_runs')/mode/'run-1.zip') as z:
+                  review=json.loads(z.read('話者割当て要確認.json'))
+                  asr=json.loads(z.read('whisper_asr.json'))
+                  assert len(review['words']) > 0
+                  assert asr['settings']['beam_size']==int(mode.split('beam')[1])
+                  print(mode, 'review_words', review['review_words'], 'total', review['word_count'], 'flags',review['reason_counts'])
+          PY
+      - name: Preserve sanitized results and metrics only
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: transcriber-ami-reference-benchmark-${{ github.run_id }}
-          path: |
-            local_runs/
-            local_audio/ami_420_480.rttm
+          name: transcriber-asr-open-source-quality-${{ github.run_id }}
+          path: local_runs/
           retention-days: 7
