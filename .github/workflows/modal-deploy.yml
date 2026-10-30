@@ -1,4 +1,4 @@
-name: v0.1 isolated 60min Web-to-GPU transcription E2E
+name: v0.1 isolated 60min transcript save diagnostic E2E
 on:
   push:
     branches: [eval/meeting-transcriber-stage1-20261030]
@@ -21,7 +21,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: ryotamatsuki/japanese-meeting-transcriber-colab
-          ref: 5303012208be458791d9f304f7ff02c661faf4fb
+          ref: 9e2c4a35d8a24aec50ccccfb79e84031dd35fc0e
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
