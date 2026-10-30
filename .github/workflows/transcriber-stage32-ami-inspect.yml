@@ -1,0 +1,36 @@
+name: Stage32 AMI natural 3/4 meeting corpus schema
+on:
+  push:
+    branches: [eval/meeting-transcriber-stage1-20261030]
+    paths: [.github/workflows/transcriber-stage32-ami-inspect.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Fetch AMI manual annotation schema CC BY 4.0 without exposing transcript
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from io import BytesIO
+          from urllib.request import urlopen
+          from zipfile import ZipFile
+          import xml.etree.ElementTree as ET
+          u='https://groups.inf.ed.ac.uk/ami/AMICorpusAnnotations/ami_public_manual_1.6.2.zip'
+          raw=urlopen(u,timeout=150).read()
+          with ZipFile(BytesIO(raw)) as z:
+              for mid in ('EN2003a','EN2004a'):
+                  files=[x for x in z.namelist() if mid in x and '.words.xml' in x]
+                  print('MEETING',mid,'files',files[:8])
+                  for path in files[:4]:
+                      root=ET.fromstring(z.read(path))
+                      sample=[(x.tag.split('}')[-1],sorted(x.attrib)) for x in root.iter()
+                              if x.tag.split('}')[-1] in ('w','word')][:4]
+                      rows=[x for x in root.iter() if x.tag.split('}')[-1] in ('w','word')
+                            and x.get('start') and x.get('end')]
+                      print('SCHEMA',path,'tokens',len(rows),'fields',sample)
+                  assert len(files)>=3, 'Actual 3-4 speaker manual annotations missing'
+          PY
