@@ -1,0 +1,108 @@
+name: Stage33 real AMI 3 and 4 speaker diarization
+on:
+  push:
+    branches: [eval/meeting-transcriber-stage1-20261030]
+    paths: [.github/workflows/transcriber-stage33-ami-3-4.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: real-ami-3-4-a10
+  cancel-in-progress: false
+jobs:
+  score:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    environment: ehime-kokubunsai-ai-poc
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+      TRANSCRIBER_GPU: A10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ryotamatsuki/japanese-meeting-transcriber-colab
+          ref: 98fed73e49aa69d67586ddc80a20a35903e22b07
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Evaluate authentic AMI human-timed meetings in isolated GPU
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install modal==1.4.3 pyannote.metrics==4.2.0 imageio-ffmpeg==0.6.0
+          test -n "$MODAL_TOKEN_ID" && test -n "$MODAL_TOKEN_SECRET"
+          mkdir -p local_runs/ami
+          FFMPEG="$(python -c 'import imageio_ffmpeg;print(imageio_ffmpeg.get_ffmpeg_exe())')"
+          python -m scripts.prepare_ami_natural --meeting EN2003a --out local_audio/ami --ffmpeg "$FFMPEG"
+          python -m scripts.prepare_ami_natural --meeting EN2004a --out local_audio/ami --ffmpeg "$FFMPEG"
+          env_name="ami-real-$GITHUB_RUN_ID"
+          created=0
+          cleanup() {
+            rm -f local_audio/ami/*.mp3 local_audio/ami/*.wav local_audio/ami/*.zip
+            rm -f local_runs/ami/EN2003a/run-1.zip local_runs/ami/EN2004a/run-1.zip
+            if [[ "$created" == 1 ]]; then
+              modal environment delete -y "$env_name" >/tmp/ami-env-delete.log 2>&1 || {
+                echo "ISOLATED_ENV_CLEANUP_FAILED"; return 1;
+              }
+              echo "ISOLATED_ENV_CLEANUP_SUCCEEDED"
+            fi
+          }
+          trap cleanup EXIT
+          modal environment create "$env_name"
+          created=1
+          python - <<'PY'
+          from pathlib import Path
+          p=Path("modal_app.py")
+          s=p.read_text()
+          a="modal.Secret.from_name('transcriber-hf', required_keys=['HF_TOKEN'])"
+          b="modal.Secret.from_name('transcriber-hf', environment_name='main', required_keys=['HF_TOKEN'])"
+          assert s.count(a)==1
+          p.write_text(s.replace(a,b))
+          PY
+          for meeting in EN2003a EN2004a; do
+            echo "START_REAL_MEETING_GPU $meeting"
+            timeout --signal=TERM --kill-after=20s 1050s modal run -e "$env_name" modal_app.py \
+              --audio "local_audio/ami/$meeting.mp3" --output "local_runs/ami/$meeting" \
+              --stage diarization --language en --quality-experiment
+            test -s "local_runs/ami/$meeting/run-1.zip"
+            echo "REAL_MEETING_GPU_COMPLETE $meeting"
+          done
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from zipfile import ZipFile
+          from scripts.evaluate_diarization import load_rttm,compare
+          root=Path('local_runs/ami')
+          rows=[]
+          for mid,n in [('EN2003a',3),('EN2004a',4)]:
+              meta=json.loads((Path('local_audio/ami')/(mid+'.metadata.json')).read_text())
+              ref=load_rttm(Path('local_audio/ami')/(mid+'.rttm'))
+              assert len({x['speaker_id'] for x in ref})==n==meta['human_speaker_count']
+              with ZipFile(root/mid/'run-1.zip') as z:
+                  results={}
+                  for name,file in [('exclusive','pyannote_話者区間.json'),('standard','pyannote_通常話者区間.json')]:
+                      cand=json.loads(z.read(file))['segments']
+                      r=compare(ref,cand,collar=0.)
+                      results[name]={'der_percent':r['der_percent'],
+                          'jer_percent':r['jer_percent'],
+                          'predicted_speakers':r['candidate_speaker_count']}
+              row={'meeting':mid,'language':'en','human_speakers':n,
+                   'natural_meeting':True,'duration_seconds':300,
+                   'reference':'human word timestamps, 0.15s merged proxy RTTM',
+                   'rttm_sha256':meta['rttm_sha256'],'license':'CC BY 4.0',
+                   'mode_scores':results,'not_japanese_asr_validation':True}
+              rows.append(row)
+              print('AMI_REAL_MEETING_METRICS',json.dumps(row,sort_keys=True))
+          (root/'speaker_3_4_real_meetings.json').write_text(
+              json.dumps({'records':rows,'release_status':'NO_GO'},indent=2)+'\n')
+          PY
+      - name: Save numeric-only speaker error summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stage33-ami-real-3-4-numeric
+          path: local_runs/ami/speaker_3_4_real_meetings.json
+          if-no-files-found: warn
+          retention-days: 14
