@@ -63,13 +63,15 @@ jobs:
           modal secret create -e "$env_name" transcriber-beta-auth "BETA_PASSWORD=$BETA_SMOKE_PASSWORD" "BETA_SESSION_SECRET=$BETA_SESSION_SECRET"
           timeout --signal=TERM --kill-after=20s 780s modal deploy -e "$env_name" beta_modal.py 2>&1 | tee /tmp/beta-deploy.log
           export BETA_SMOKE_URL
-          BETA_SMOKE_URL="$(python - <<'PY'
-          import re
-          log=open('/tmp/beta-deploy.log').read()
-          links=re.findall(r'https://[A-Za-z0-9-]+\.modal\.run',log)
-          if not links:
-              raise SystemExit('No Modal HTTPS URL was returned by deployment')
-          print(links[0])
+          BETA_SMOKE_URL="$(python - "$env_name" <<'PY'
+          import modal,sys
+          f=modal.Function.from_name(
+              'japanese-meeting-transcriber-private-beta','private_web',
+              environment_name=sys.argv[1])
+          url=f.get_web_url()
+          if not url or not url.startswith('https://'):
+              raise SystemExit('Modal did not expose the beta web function URL')
+          print(url)
           PY
           )"
           timeout --signal=TERM --kill-after=20s 770s python scripts/smoke_beta_live.py
