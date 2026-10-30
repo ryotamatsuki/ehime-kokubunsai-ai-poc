@@ -1,4 +1,4 @@
-name: Transcriber Stage 1 diarization OFF verification
+name: Transcriber Stage 1 A10 tests 3-6
 on:
   workflow_dispatch:
 permissions:
@@ -9,38 +9,73 @@ concurrency:
 jobs:
   validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 35
     environment: ehime-kokubunsai-ai-poc
     env:
+      TRANSCRIBER_GPU: A10
       MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
       MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
     steps:
       - uses: actions/checkout@v4
         with:
           repository: ryotamatsuki/japanese-meeting-transcriber-colab
-          ref: 37071dbb3197dae59b37fccfab034242a256c977
+          ref: 719c296daa642d5f52e853cdcb5e7753419fb9a8
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Prepare SDK and licensed audio
+      - name: Install SDK and check credentials without printing values
         run: |
           python -m pip install modal==1.4.3
           test -n "$MODAL_TOKEN_ID"
           test -n "$MODAL_TOKEN_SECRET"
           mkdir -p local_runs
+      - name: Prepare licensed Japanese two-speaker audio
+        run: |
           python scripts/prepare_validation_audio.py
           cp local_audio/provenance.json local_runs/audio-provenance.json
-      - name: Test 5 - diarization OFF without HF Secret
+      - name: Test 3 - Community-1 estimated speaker count
+        id: diar
+        continue-on-error: true
         run: |
           set -o pipefail
-          timeout --signal=TERM --kill-after=30s 180s python -m modal run modal_app.py --audio local_audio/kyoto_two_speakers.ogg --no-diarization --output local_runs/05-off 2>&1 | tee local_runs/05-off.log
-          python scripts/validate_evidence.py local_runs/05-off/evidence.json --stage full --off
+          timeout --signal=TERM --kill-after=30s 300s python -m modal run modal_app.py --stage diarization --audio local_audio/kyoto_two_speakers.ogg --output local_runs/03-diar 2>&1 | tee local_runs/03-diar.log
+          python scripts/validate_evidence.py local_runs/03-diar/evidence.json --stage diarization --expected-gpu A10
+          python scripts/validate_run.py local_runs/03-diar/run-1.zip --stage diarization
+      - name: Test 4 - integrated output
+        if: ${{ !cancelled() && steps.diar.outcome == 'success' }}
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          timeout --signal=TERM --kill-after=30s 300s python -m modal run modal_app.py --audio local_audio/kyoto_two_speakers.ogg --output local_runs/04-full 2>&1 | tee local_runs/04-full.log
+          python scripts/validate_evidence.py local_runs/04-full/evidence.json --stage full --expected-gpu A10
+          python scripts/validate_run.py local_runs/04-full/run-1.zip
+      - name: Test 5 - diarization OFF (no HF Secret)
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          timeout --signal=TERM --kill-after=30s 300s python -m modal run modal_app.py --audio local_audio/kyoto_two_speakers.ogg --no-diarization --output local_runs/05-off 2>&1 | tee local_runs/05-off.log
+          python scripts/validate_evidence.py local_runs/05-off/evidence.json --stage full --off --expected-gpu A10
           python scripts/validate_run.py local_runs/05-off/run-1.zip --off
-      - name: Save evidence even if capacity unavailable
+      - name: Test 6a - offline model weights reload and real inference
+        if: ${{ !cancelled() && steps.diar.outcome == 'success' }}
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          timeout --signal=TERM --kill-after=30s 300s python -m modal run modal_app.py --audio local_audio/kyoto_two_speakers.ogg --repeat 2 --output local_runs/06-model-cache 2>&1 | tee local_runs/06-model-cache.log
+          python scripts/validate_evidence.py local_runs/06-model-cache/evidence.json --stage full --cache-mode model --expected-gpu A10
+      - name: Test 6b - result JSON reuse
+        if: ${{ !cancelled() && steps.diar.outcome == 'success' }}
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          timeout --signal=TERM --kill-after=30s 300s python -m modal run modal_app.py --audio local_audio/kyoto_two_speakers.ogg --repeat 2 --result-cache --output local_runs/07-result-cache 2>&1 | tee local_runs/07-result-cache.log
+          python scripts/validate_evidence.py local_runs/07-result-cache/evidence.json --stage full --cache-mode result --expected-gpu A10
+      - name: Upload evidence and output archives (no input audio or credentials)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: transcriber-stage1-off-${{ github.run_id }}
+          name: transcriber-stage1-a10-${{ github.run_id }}
           path: local_runs/
           retention-days: 7
