@@ -1,0 +1,109 @@
+name: Stage9 A10 Japanese overlap separation and re-ASR feasibility pilot
+on:
+  push:
+    branches: [eval/meeting-transcriber-stage1-20261030]
+    paths: [.github/workflows/stage9-overlap-separation.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: meeting-transcriber-stage1-validation
+  cancel-in-progress: false
+jobs:
+  pilot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    environment: ehime-kokubunsai-ai-poc
+    env:
+      TRANSCRIBER_GPU: A10
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ryotamatsuki/japanese-meeting-transcriber-colab
+          ref: 2828c0ff2c26dba2f754752b7d68a2c5891fc718
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install lightweight CLI dependencies and check authentication
+        run: |
+          set -eu
+          python -m pip install modal==1.4.3 imageio-ffmpeg==0.6.0
+          test -n "$MODAL_TOKEN_ID" && test -n "$MODAL_TOKEN_SECRET"
+          mkdir -p local_audio local_runs
+      - name: Test two naturally overlapping Japanese conversations with independent speaker tracks
+        shell: bash
+        run: |
+          set -euo pipefail
+          FFMPEG="$(python -c 'import imageio_ffmpeg;print(imageio_ffmpeg.get_ffmpeg_exe())')"
+          for n in 01 05; do
+            root="https://huggingface.co/datasets/IngCrowd/japanese-themed-dialogue/resolve/main/japanese-themed-dialogue${n}/japanese-themed-dialogue${n}"
+            for part in _audio _individual_audio1 _individual_audio2; do
+              curl -fLsS --retry 3 --connect-timeout 25 --max-time 300 -o "local_audio/${n}${part}.wav" "${root}${part}.wav?download=true"
+            done
+            curl -fLsS --retry 3 --connect-timeout 25 --max-time 150 -o "local_audio/${n}.eaf" "${root}.eaf?download=true"
+            python -m scripts.stage9_select_eval_windows --eaf "local_audio/${n}.eaf" --max-count 1 --output "local_runs/${n}-windows.json"
+            python - "$n" <<'PY'
+          from pathlib import Path
+          import json,sys
+          n=sys.argv[1]
+          meta=json.loads((Path('local_runs')/(n+'-windows.json')).read_text())
+          if not meta['windows']:
+              raise SystemExit('No fully-annotated short overlapping reference window in audio '+n)
+          clip=meta['windows'][0]
+          clip['label']='IngCrowd_'+n+'_oracle-selected_overlap'
+          (Path('local_runs')/(n+'-reference-private.json')).write_text(json.dumps(clip,ensure_ascii=False))
+          (Path('local_runs')/(n+'-cut-numeric.json')).write_text(json.dumps(
+             {'start':clip['start'],'duration':clip['end']-clip['start']},ensure_ascii=False))
+          PY
+            read -r start duration < <(python - "$n" <<'PY'
+          import json,sys
+          d=json.load(open('local_runs/'+sys.argv[1]+'-cut-numeric.json'))
+          print(d['start'],d['duration'])
+          PY
+            )
+            for item in "_audio" "_individual_audio1" "_individual_audio2"; do
+              "$FFMPEG" -hide_banner -loglevel error -nostdin -y -ss "$start" -t "$duration" -i "local_audio/${n}${item}.wav" -ar 8000 -ac 1 -c:a pcm_s16le "local_audio/${n}${item}_8k.wav"
+            done
+            rm -f local_audio/${n}_audio.wav local_audio/${n}_individual_audio1.wav local_audio/${n}_individual_audio2.wav
+            echo "STAGE9_PILOT_START $n"
+            set +e
+            timeout --signal=TERM --kill-after=20s 520s python -m modal run modal_stage9.py --mixed "local_audio/${n}_audio_8k.wav" --sp1 "local_audio/${n}_individual_audio1_8k.wav" --sp2 "local_audio/${n}_individual_audio2_8k.wav" --reference-file "local_runs/${n}-reference-private.json" --output "local_runs/${n}-result.json" >/tmp/stage9.log 2>&1
+            code=$?
+            set -e
+            if [ "$code" -eq 0 ]; then
+              echo "STAGE9_PILOT_SUCCESS $n"
+            else
+              echo "STAGE9_PILOT_FAILED id=$n returncode=$code"
+              printf '{"id":"%s","success":false,"exit_code":%s}\n' "$n" "$code" > "local_runs/${n}-failure.json"
+              tail -n 10 /tmp/stage9.log | sed -E 's/([A-Z][a-z]{3}[a-z]* [A-Z][a-z]{3}[a-z]* [0-9]+)//g' | cut -c1-260
+            fi
+            rm -f "local_runs/${n}-reference-private.json" "local_runs/${n}-windows.json" "local_runs/${n}-cut-numeric.json" "local_audio/${n}.eaf" local_audio/${n}*_8k.wav
+          done
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          rows=[json.loads(p.read_text()) for p in sorted(Path('local_runs').glob('??-result.json'))]
+          fails=[json.loads(p.read_text()) for p in sorted(Path('local_runs').glob('??-failure.json'))]
+          summary={'trials_attempted':2,'completed':len(rows),'failed':fails,
+                   'methods':['mixed mono ASR','SepFormer WSJ English 8k + 2 ASR','human individual-track oracle + 2 ASR'],
+                   'reference_license':'IngCrowd CC BY-NC 4.0 noncommercial',
+                   'same_asr_model':'Whisper large-v3 beam 5',
+                   'selection':'oracle human ELAN overlap fully enclosed short windows; NOT model detections',
+                   'per_record':rows,'release_note':'No auto replacement or separation adopted from pilot results'}
+          Path('local_runs/stage9-summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2))
+          print('STAGE9_SUMMARY_METRICS_ONLY',json.dumps({k:v for k,v in summary.items() if k!='per_record'},ensure_ascii=False))
+          PY
+      - name: Upload only numeric results (never audio/reference text)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stage9-sepformer-japanese-overlap-${{ github.run_id }}
+          path: |
+            local_runs/stage9-summary.json
+            local_runs/??-result.json
+            local_runs/??-failure.json
+          if-no-files-found: warn
+          retention-days: 7
