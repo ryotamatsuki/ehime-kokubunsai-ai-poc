@@ -1,5 +1,8 @@
 name: Qwen ASR + Japanese ForcedAligner + Community-1 integrated cpCER pilot
 on:
+  push:
+    branches: [eval/meeting-transcriber-stage1-20261030]
+    paths: [.github/workflows/qwen-forced-alignment-pilot.yml]
   workflow_dispatch:
 permissions:
   contents: read
@@ -19,7 +22,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: ryotamatsuki/japanese-meeting-transcriber-colab
-          ref: 049fd9c0b87132950df8a2888a7204809f66d6c0
+          ref: db762c2e06d1229a367a693df449b4f0ee068cbe
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
