@@ -21,7 +21,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: ryotamatsuki/japanese-meeting-transcriber-colab
-          ref: af202287e30a5cf81dd18fbf87f85152bf75b9a0
+          ref: fcef0a4f6482f29a036d9b08c70f899e987c9c09
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
@@ -92,6 +92,7 @@ jobs:
           print(url)
           PY
           )"
+          export BETA_SMOKE_DIAGNOSE_PHASE=1
           export BETA_SMOKE_DIARIZATION=1
           export BETA_SMOKE_AUDIO_PATH=local_audio/public_qwen_675s.mp3
           export BETA_SMOKE_MIN_DURATION_SECONDS=650
