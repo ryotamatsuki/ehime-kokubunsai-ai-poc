@@ -1,0 +1,29 @@
+name: v0.1 overlap review real Chromium UI QA
+on:
+  push:
+    branches: [eval/meeting-transcriber-stage1-20261030]
+    paths: [.github/workflows/browser-review-qa.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  chromium:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ryotamatsuki/japanese-meeting-transcriber-colab
+          ref: 06f7075aab30e26d4f8f204a12ebdea1b7a24f6a
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install local beta server test libraries
+        run: |
+          python -m pip install -r requirements-beta-test.txt uvicorn==0.34.2 playwright==1.56.0
+          python -m playwright install --with-deps chromium
+      - name: Confirm review UI with real browser using synthetic local test audio
+        run: |
+          node --check beta/site.js
+          python scripts/browser_beta_review_smoke.py
