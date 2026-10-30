@@ -1,10 +1,5 @@
 name: AMI holdout oracle speaker-count 3 comparison
 on:
-  push:
-    branches:
-      - eval/meeting-transcriber-stage1-20261030
-    paths:
-      - .github/workflows/modal-deploy.yml
   workflow_dispatch:
 permissions:
   contents: read
