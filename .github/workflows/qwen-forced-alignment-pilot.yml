@@ -1,8 +1,5 @@
 name: Qwen ASR + Japanese ForcedAligner + Community-1 integrated cpCER pilot
 on:
-  push:
-    branches: [eval/meeting-transcriber-stage1-20261030]
-    paths: [.github/workflows/qwen-forced-alignment-pilot.yml]
   workflow_dispatch:
 permissions:
   contents: read
