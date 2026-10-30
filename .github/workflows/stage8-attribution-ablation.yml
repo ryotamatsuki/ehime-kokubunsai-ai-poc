@@ -1,0 +1,108 @@
+name: Stage8 pilot normal-vs-exclusive speaker attribution cpCER (3 dialogues)
+on:
+  push:
+    branches: [eval/meeting-transcriber-stage1-20261030]
+    paths: [.github/workflows/stage8-attribution-ablation.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: meeting-transcriber-stage1-validation
+  cancel-in-progress: false
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: ehime-kokubunsai-ai-poc
+    env:
+      TRANSCRIBER_GPU: A10
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ryotamatsuki/japanese-meeting-transcriber-colab
+          ref: 5884c18664cd19ab86aad503da06ae4ffce9caa9
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install pinned benchmark dependencies
+        run: |
+          python -m pip install modal==1.4.3 pyannote.metrics==4.1 imageio-ffmpeg==0.6.0 rapidfuzz==3.14.3
+          test -n "$MODAL_TOKEN_ID" && test -n "$MODAL_TOKEN_SECRET"
+          python -m unittest tests.test_eval_elan tests.test_evaluate_attributed_transcript tests.test_evaluate_attribution_ablation -v
+      - name: Pilot strict speaker-attributed CER comparison on identical Japanese ASR words
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p local_audio local_runs
+          export HF_HUB_DISABLE_TELEMETRY=1
+          FFMPEG="$(python -c 'import imageio_ffmpeg;print(imageio_ffmpeg.get_ffmpeg_exe())')"
+          for n in 01 05 08; do
+            echo "DATASET_SAMPLE_START $n"
+            root="https://huggingface.co/datasets/IngCrowd/japanese-themed-dialogue/resolve/main/japanese-themed-dialogue${n}/japanese-themed-dialogue${n}"
+            curl -fLsS --retry 3 --connect-timeout 25 --max-time 180 --output "local_audio/${n}.eaf" "${root}.eaf?download=true"
+            curl -fLsS --retry 3 --connect-timeout 25 --max-time 240 --output "local_audio/${n}.wav" "${root}_audio.wav?download=true"
+            test "$(wc -c < local_audio/${n}.wav)" -gt 5000000
+            "$FFMPEG" -hide_banner -loglevel error -nostdin -y -i "local_audio/${n}.wav" -ac 1 -ar 16000 -b:a 48k "local_audio/${n}.mp3"
+            rm "local_audio/${n}.wav"
+            set +e
+            timeout --signal=TERM --kill-after=30s 450s python -m modal run modal_app.py --stage full --quality-experiment --expected-speakers 2 --audio "local_audio/${n}.mp3" --output "local_runs/${n}" > "/tmp/transcriber-${n}.log" 2>&1
+            rc=$?
+            set -e
+            if [ "$rc" -ne 0 ]; then
+              echo "GPU_SAMPLE_FAILURE ${n} exit=${rc}"
+              printf '{"id":"%s","success":false,"stage":"gpu","returncode":%s}\n' "$n" "$rc" > "local_runs/${n}-failure.json"
+            else
+              python scripts/validate_evidence.py "local_runs/${n}/evidence.json" --stage full --expected-gpu A10 >/dev/null
+              python scripts/validate_run.py "local_runs/${n}/run-1.zip" >/dev/null
+              python -m scripts.evaluate_attribution_ablation --eaf "local_audio/${n}.eaf" --zip "local_runs/${n}/run-1.zip" --output "local_runs/${n}-score.json"
+              python - "${n}" <<'PY'
+          import json,sys,pathlib
+          folder=pathlib.Path('local_runs')/sys.argv[1]
+          e=json.loads((folder/'evidence.json').read_text())
+          p=pathlib.Path('local_runs')/(sys.argv[1]+'-score.json')
+          v=json.loads(p.read_text())
+          v['gpu_pipeline_seconds']=e['runs'][0].get('pipeline_seconds')
+          p.write_text(json.dumps(v,ensure_ascii=False,indent=2))
+          PY
+              echo "GPU_SAMPLE_PASS $n"
+            fi
+            rm -f "local_audio/${n}.eaf" "local_audio/${n}.mp3"
+          done
+          python - <<'PY'
+          import json,statistics
+          from pathlib import Path
+          scores=sorted(Path('local_runs').glob('??-score.json'))
+          failures=sorted(Path('local_runs').glob('??-failure.json'))
+          rows=[{'id':p.name[:2],**json.loads(p.read_text())} for p in scores]
+          old=[v['baseline_exclusive_cpcer']['cpcer'] for v in rows]
+          new=[v['regular_max_overlap_cpcer']['cpcer'] for v in rows]
+          summary={'samples_attempted':3,'samples_completed':len(rows),
+                   'failures':[p.name[:2] for p in failures],
+                   'license':'IngCrowd CC BY-NC 4.0; noncommercial research only',
+                   'same_whisper_transcript':all(x['asr_content_same'] for x in rows),
+                   'median_exclusive_cpcer_percent':100*statistics.median(old) if old else None,
+                   'median_regular_vote_cpcer_percent':100*statistics.median(new) if new else None,
+                   'regular_better_count':sum(n<o for n,o in zip(new,old)),
+                   'regular_worse_count':sum(n>o for n,o in zip(new,old)),
+                   'per_record':[{'id':r['id'],'eaf_sha256':r['reference_eaf_sha256'],
+                      'exclusive_cpcer_percent':100*r['baseline_exclusive_cpcer']['cpcer'],
+                      'regular_cpcer_percent':100*r['regular_max_overlap_cpcer']['cpcer'],
+                      'delta_pp':r['delta_cpcer_percentage_points']} for r in rows],
+                   'caution':'Research-only 3-dialogue pilot. Regular overlap intervals do not duplicate or recover simultaneous ASR words. No deployment change.'}
+          Path('local_runs/attribution-ablation-summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2))
+          print('STAGE8_ABLATION_ONLY',json.dumps({k:v for k,v in summary.items() if k!='per_record'},ensure_ascii=False))
+          PY
+      - name: Preserve metrics ONLY (no original audio, ELAN transcripts or raw model text)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stage8-speaker-attribution-ablation-${{ github.run_id }}
+          path: |
+            local_runs/attribution-ablation-summary.json
+            local_runs/??-score.json
+            local_runs/??-failure.json
+          if-no-files-found: warn
+          retention-days: 7
