@@ -1,0 +1,109 @@
+name: Stage25 Qwen 60min Web E2E actual A10 run
+on:
+  push:
+    branches: [eval/meeting-transcriber-stage1-20261030]
+    paths: [.github/workflows/transcriber-stage25-qwen-60min-01.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: transcriber-stage25-qwen-60min-a10
+  cancel-in-progress: false
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    environment: ehime-kokubunsai-ai-poc
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ryotamatsuki/japanese-meeting-transcriber-colab
+          ref: 033b7232e95f1d14ab975db686f8e336670777fe
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install test client and Modal SDK
+        run: |
+          python -m pip install modal==1.4.3 httpx==0.28.1 imageio-ffmpeg==0.6.0
+          test -n "$MODAL_TOKEN_ID"
+          test -n "$MODAL_TOKEN_SECRET"
+          mkdir -p local_runs
+          # Independent 60-min Japanese dialogue stress test, IngCrowd CC BY-NC.
+          mkdir -p local_audio
+          curl -fLsS --retry 3 --connect-timeout 20 --max-time 240 -o local_audio/ingcrowd01.wav "https://huggingface.co/datasets/IngCrowd/japanese-themed-dialogue/resolve/main/japanese-themed-dialogue01/japanese-themed-dialogue01_audio.wav?download=true"
+          FFMPEG="$(python -c 'import imageio_ffmpeg;print(imageio_ffmpeg.get_ffmpeg_exe())')"
+          "$FFMPEG" -hide_banner -loglevel error -nostdin -y -stream_loop 7 -i local_audio/ingcrowd01.wav -t 3595 -ac 1 -ar 16000 -c:a libmp3lame -b:a 48k local_audio/public_repeated_3595s.mp3
+          rm -f local_audio/ingcrowd01.wav
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('local_audio/public_repeated_3595s.mp3')
+          assert 15*1024*1024 < p.stat().st_size < 25*1024*1024
+          print('Public synthetic long-test file size:',p.stat().st_size)
+          PY
+      - name: Create isolated environment, ephemeral credentials, deploy, test and destroy
+        shell: bash
+        run: |
+          set -euo pipefail
+          env_name="transcriber-v01-qwen-60min-${GITHUB_RUN_ID}"
+          created=0
+          cleanup() {
+            if [[ "$created" == 1 ]]; then
+              modal environment delete -y "$env_name" > /tmp/beta-teardown.log 2>&1 || {
+                echo "ISOLATED_ENV_CLEANUP_FAILED: $env_name"; cat /tmp/beta-teardown.log; return 1;
+              }
+              echo "ISOLATED_ENV_CLEANUP_SUCCEEDED"
+            fi
+          }
+          trap cleanup EXIT
+          modal environment create "$env_name"
+          created=1
+          export BETA_SMOKE_PASSWORD
+          BETA_SMOKE_PASSWORD="$(openssl rand -hex 20)"
+          export BETA_SESSION_SECRET
+          BETA_SESSION_SECRET="$(openssl rand -hex 36)"
+          echo "::add-mask::$BETA_SMOKE_PASSWORD"
+          echo "::add-mask::$BETA_SESSION_SECRET"
+          # Reference the preexisting HF Secret from 'main' without reading or copying its values.
+          # This source rewrite is ephemeral in the Actions checkout only.
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('beta_modal_qwen_research.py')
+          s=p.read_text()
+          before="modal.Secret.from_name('transcriber-hf',required_keys=['HF_TOKEN'])"
+          after="modal.Secret.from_name('transcriber-hf',environment_name='main',required_keys=['HF_TOKEN'])"
+          assert s.count(before)==1, 'Missing expected speaker-token reference'
+          p.write_text(s.replace(before,after))
+          PY
+          modal secret create -e "$env_name" transcriber-beta-auth "BETA_PASSWORD=$BETA_SMOKE_PASSWORD" "BETA_SESSION_SECRET=$BETA_SESSION_SECRET"
+          timeout --signal=TERM --kill-after=20s 780s modal deploy -e "$env_name" beta_modal_qwen_research.py 2>&1 | tee /tmp/beta-deploy.log
+          export BETA_SMOKE_URL
+          BETA_SMOKE_URL="$(python - "$env_name" <<'PY'
+          import modal,sys
+          f=modal.Function.from_name(
+              'japanese-meeting-transcriber-qwen-web-research','private_web',
+              environment_name=sys.argv[1])
+          url=f.get_web_url()
+          if not url or not url.startswith('https://'):
+              raise SystemExit('Modal did not expose the beta web function URL')
+          print(url)
+          PY
+          )"
+          export BETA_SMOKE_DIAGNOSE_PHASE=1
+          export BETA_SMOKE_DIARIZATION=1
+          export BETA_SMOKE_AUDIO_PATH=local_audio/public_repeated_3595s.mp3
+          export BETA_SMOKE_MIN_DURATION_SECONDS=3540
+          export BETA_SMOKE_MAX_POLLS=550
+          timeout --signal=TERM --kill-after=30s 2600s python scripts/smoke_beta_live.py
+          echo 'PRIVATE_BETA_EPHEMERAL_E2E_COMPLETE; cleanup follows'
+      - name: Preserve sanitized smoke result and test parameters only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: transcriber-v01-qwen-60min-different-audio-${{ github.run_id }}
+          path: local_runs/smoke_result.json
+          if-no-files-found: warn
+          retention-days: 7
