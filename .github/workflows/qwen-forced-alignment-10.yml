@@ -1,8 +1,5 @@
 name: Qwen3 Japanese speaker-attributed cpCER all ten dialogues
 on:
-  push:
-    branches: [eval/meeting-transcriber-stage1-20261030]
-    paths: [.github/workflows/qwen-forced-alignment-10.yml]
   workflow_dispatch:
 permissions:
   contents: read
