@@ -1,4 +1,4 @@
-name: v0.1 isolated Modal private beta diarization-on E2E
+name: v0.1 isolated 60min Web-to-GPU transcription E2E
 on:
   workflow_dispatch:
 permissions:
@@ -9,7 +9,7 @@ concurrency:
 jobs:
   e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 32
     environment: ehime-kokubunsai-ai-poc
     env:
       MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
@@ -18,18 +18,26 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: ryotamatsuki/japanese-meeting-transcriber-colab
-          ref: 75bdbccdc45f113a64b69d7e8bda2da35191c270
+          ref: 5303012208be458791d9f304f7ff02c661faf4fb
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - name: Install test client and Modal SDK
         run: |
-          python -m pip install modal==1.4.3 httpx==0.28.1
+          python -m pip install modal==1.4.3 httpx==0.28.1 imageio-ffmpeg==0.6.0
           test -n "$MODAL_TOKEN_ID"
           test -n "$MODAL_TOKEN_SECRET"
           mkdir -p local_runs
           python scripts/prepare_validation_audio.py
+          FFMPEG="$(python -c 'import imageio_ffmpeg;print(imageio_ffmpeg.get_ffmpeg_exe())')"
+          "$FFMPEG" -hide_banner -loglevel error -nostdin -y -stream_loop 111 -i local_audio/kyoto_two_speakers.ogg -t 3595 -ac 1 -ar 16000 -c:a libmp3lame -b:a 48k local_audio/public_repeated_3595s.mp3
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('local_audio/public_repeated_3595s.mp3')
+          assert 15*1024*1024 < p.stat().st_size < 25*1024*1024
+          print('Public synthetic long-test file size:',p.stat().st_size)
+          PY
       - name: Create isolated environment, ephemeral credentials, deploy, test and destroy
         shell: bash
         run: |
@@ -79,7 +87,10 @@ jobs:
           PY
           )"
           export BETA_SMOKE_DIARIZATION=1
-          timeout --signal=TERM --kill-after=20s 770s python scripts/smoke_beta_live.py
+          export BETA_SMOKE_AUDIO_PATH=local_audio/public_repeated_3595s.mp3
+          export BETA_SMOKE_MIN_DURATION_SECONDS=3540
+          export BETA_SMOKE_MAX_POLLS=340
+          timeout --signal=TERM --kill-after=30s 1480s python scripts/smoke_beta_live.py
           echo 'PRIVATE_BETA_EPHEMERAL_E2E_COMPLETE; cleanup follows'
       - name: Preserve sanitized smoke result and test parameters only
         if: always()
