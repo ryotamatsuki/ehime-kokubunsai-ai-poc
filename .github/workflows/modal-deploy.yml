@@ -1,5 +1,10 @@
-name: Stage 1 A10 forced-two-speaker quality check
+name: Diarization quality A10 experimental side-by-side
 on:
+  push:
+    branches:
+      - eval/meeting-transcriber-stage1-20261030
+    paths:
+      - .github/workflows/modal-deploy.yml
   workflow_dispatch:
 permissions:
   contents: read
@@ -7,7 +12,7 @@ concurrency:
   group: meeting-transcriber-stage1-validation
   cancel-in-progress: false
 jobs:
-  forced_two:
+  compare:
     runs-on: ubuntu-latest
     timeout-minutes: 18
     environment: ehime-kokubunsai-ai-poc
@@ -19,12 +24,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: ryotamatsuki/japanese-meeting-transcriber-colab
-          ref: 719c296daa642d5f52e853cdcb5e7753419fb9a8
+          ref: 679ecefc64cb681f61ab977d25174a192a318f90
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Prepare verified licensed Japanese two-speaker recording and Modal CLI
+      - name: Install Modal and prepare consented public audio
         run: |
           python -m pip install modal==1.4.3
           test -n "$MODAL_TOKEN_ID"
@@ -32,36 +37,36 @@ jobs:
           mkdir -p local_runs
           python scripts/prepare_validation_audio.py
           cp local_audio/provenance.json local_runs/audio-provenance.json
-      - name: GPU A10 Community-1 with num_speakers=2
+          python -m unittest tests.test_quality -v
+      - name: GPU A10 fixed-two speaker quality diagnostics plus reversible cleanup
         run: |
           set -o pipefail
-          timeout --signal=TERM --kill-after=20s 360s python -m modal run modal_app.py --stage diarization --expected-speakers 2 --audio local_audio/kyoto_two_speakers.ogg --output local_runs/03-diar-2 2>&1 | tee local_runs/03-diar-2.log
-          python scripts/validate_evidence.py local_runs/03-diar-2/evidence.json --stage diarization --expected-gpu A10
-          python scripts/validate_run.py local_runs/03-diar-2/run-1.zip --stage diarization
-      - name: GPU A10 integrated ASR + Community-1 with num_speakers=2
-        run: |
-          set -o pipefail
-          timeout --signal=TERM --kill-after=20s 360s python -m modal run modal_app.py --stage full --expected-speakers 2 --audio local_audio/kyoto_two_speakers.ogg --output local_runs/04-full-2 2>&1 | tee local_runs/04-full-2.log
-          python scripts/validate_evidence.py local_runs/04-full-2/evidence.json --stage full --expected-gpu A10
-          python scripts/validate_run.py local_runs/04-full-2/run-1.zip
-      - name: Assert two distinct speaker labels in diarization and integrated output
+          timeout --signal=TERM --kill-after=30s 360s python -m modal run modal_app.py --stage full --expected-speakers 2 --quality-experiment --speaker-cleanup-ms 100 --audio local_audio/kyoto_two_speakers.ogg --output local_runs/quality-100 2>&1 | tee local_runs/quality-100.log
+          python scripts/validate_evidence.py local_runs/quality-100/evidence.json --stage full --expected-gpu A10
+          python scripts/validate_run.py local_runs/quality-100/run-1.zip
+      - name: Validate original, standard and cleaned outputs without a reference accuracy claim
         run: |
           python - <<'PY'
           import json, zipfile
           from pathlib import Path
-          for folder in ('03-diar-2', '04-full-2'):
-              with zipfile.ZipFile(Path('local_runs') / folder / 'run-1.zip') as z:
-                  d = json.loads(z.read('pyannote_話者区間.json'))
-                  ids = [s['speaker_id'] for s in d['segments']]
-                  print(f'{folder}: intervals={len(ids)} unique_speakers={len(set(ids))} adjacent_switches={sum(a != b for a,b in zip(ids,ids[1:]))}')
-                  assert d['settings']['expected'] == 2, 'Model did not receive requested speaker count'
-                  assert len(set(ids)) == 2, 'Expected two speaker IDs from Community-1'
-                  assert any(a != b for a,b in zip(ids,ids[1:])), 'No speaker boundary switch detected'
+          path=Path('local_runs/quality-100/run-1.zip')
+          with zipfile.ZipFile(path) as z:
+              raw=json.loads(z.read('pyannote_補正前話者区間.json'))['segments']
+              normal=json.loads(z.read('pyannote_通常話者区間.json'))['segments']
+              clean=json.loads(z.read('pyannote_話者区間.json'))['segments']
+              report=json.loads(z.read('処理レポート.json'))
+              ids=lambda xs:set(x['speaker_id'] for x in xs)
+              switches=lambda xs:sum(a['speaker_id']!=b['speaker_id'] for a,b in zip(xs,xs[1:]))
+              print(f'normal={len(normal)} normal_ids={len(ids(normal))} exclusive_raw={len(raw)} cleaned={len(clean)} raw_switches={switches(raw)} clean_switches={switches(clean)}')
+              assert len(ids(raw))==len(ids(clean))==2
+              assert switches(clean)<=switches(raw)
+              assert report['diarization_settings']['speaker_cleanup_ms']==100
+              assert len(raw)>=len(clean)
           PY
-      - name: Retain sanitized outputs and execution logs
+      - name: Preserve outputs (no original audio or HF credentials)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: stage1-a10-fixed-two-${{ github.run_id }}
+          name: stage1-a10-quality-100-${{ github.run_id }}
           path: local_runs/
           retention-days: 7
