@@ -1,4 +1,4 @@
-name: v0.1 isolated Modal private beta full E2E smoke
+name: v0.1 isolated Modal private beta diarization-on E2E
 on:
   push:
     branches:
@@ -23,7 +23,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: ryotamatsuki/japanese-meeting-transcriber-colab
-          ref: e7a0d42f64b4fcef3c6392aa4310f0c888655624
+          ref: 75bdbccdc45f113a64b69d7e8bda2da35191c270
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
@@ -58,8 +58,17 @@ jobs:
           BETA_SESSION_SECRET="$(openssl rand -hex 36)"
           echo "::add-mask::$BETA_SMOKE_PASSWORD"
           echo "::add-mask::$BETA_SESSION_SECRET"
-          # Dummy HF token is unused because this test explicitly disables diarization.
-          modal secret create -e "$env_name" transcriber-hf HF_TOKEN="offline_asr_only_dummy_token"
+          # Reference the preexisting HF Secret from 'main' without reading or copying its values.
+          # This source rewrite is ephemeral in the Actions checkout only.
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('beta_modal.py')
+          s=p.read_text()
+          before="modal.Secret.from_name('transcriber-hf',required_keys=['HF_TOKEN'])"
+          after="modal.Secret.from_name('transcriber-hf',environment_name='main',required_keys=['HF_TOKEN'])"
+          assert s.count(before)==1, 'Missing expected speaker-token reference'
+          p.write_text(s.replace(before,after))
+          PY
           modal secret create -e "$env_name" transcriber-beta-auth "BETA_PASSWORD=$BETA_SMOKE_PASSWORD" "BETA_SESSION_SECRET=$BETA_SESSION_SECRET"
           timeout --signal=TERM --kill-after=20s 780s modal deploy -e "$env_name" beta_modal.py 2>&1 | tee /tmp/beta-deploy.log
           export BETA_SMOKE_URL
@@ -74,6 +83,7 @@ jobs:
           print(url)
           PY
           )"
+          export BETA_SMOKE_DIARIZATION=1
           timeout --signal=TERM --kill-after=20s 770s python scripts/smoke_beta_live.py
           echo 'PRIVATE_BETA_EPHEMERAL_E2E_COMPLETE; cleanup follows'
       - name: Preserve sanitized smoke result and test parameters only
