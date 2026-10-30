@@ -1,4 +1,4 @@
-name: Transcriber Stage 1 isolated GPU validation
+name: Transcriber Stage 1 real GPU tests 2-6
 on:
   workflow_dispatch:
 permissions:
@@ -9,53 +9,68 @@ concurrency:
 jobs:
   validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     environment: ehime-kokubunsai-ai-poc
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
     steps:
-      - name: Checkout pinned transcriber PR (never deploy the cultural bot)
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           repository: ryotamatsuki/japanese-meeting-transcriber-colab
-          ref: b7bf442ea57d8f3cd7a41e4a8ee31796d56144c1
+          ref: f7aa4367080c247b20a2cdf0b932603d1b33a262
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Install official Modal SDK
-        run: python -m pip install modal==1.4.3
-      - name: Check credential presence without printing values
-        env:
-          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
-          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+      - name: Install SDK and check credentials without printing values
         run: |
+          python -m pip install modal==1.4.3
           test -n "$MODAL_TOKEN_ID"
           test -n "$MODAL_TOKEN_SECRET"
-      - name: Test 1 - L4 CUDA diagnostics
-        env:
-          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
-          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
-        run: |
-          set -o pipefail
           mkdir -p local_runs
-          python -m modal run modal_app.py --stage gpu --output local_runs/01-gpu 2>&1 | tee local_runs/test1-modal.log
-          python scripts/validate_evidence.py local_runs/01-gpu/evidence.json --stage gpu
-      - name: Prepare licensed short Japanese audio
+      - name: Prepare licensed Japanese two-speaker audio
         run: |
           python scripts/prepare_validation_audio.py
           cp local_audio/provenance.json local_runs/audio-provenance.json
-      - name: Test 2 - Whisper large-v3 float16 Japanese ASR
-        env:
-          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
-          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+      - name: Test 2 - large-v3 Japanese word timestamps (no HF Secret)
         run: |
           set -o pipefail
-          python -m modal run modal_app.py --stage asr --audio local_audio/kyoto_two_speakers.ogg --output local_runs/02-asr 2>&1 | tee local_runs/test2-modal.log
+          timeout --signal=TERM --kill-after=30s 600s python -m modal run modal_app.py --stage asr --audio local_audio/kyoto_two_speakers.ogg --output local_runs/02-asr 2>&1 | tee local_runs/02-asr.log
           python scripts/validate_evidence.py local_runs/02-asr/evidence.json --stage asr
           python scripts/validate_run.py local_runs/02-asr/run-1.zip --stage asr
-      - name: Upload evidence (no credentials or audio)
+      - name: Test 3 - Community-1 estimated speaker count
+        run: |
+          set -o pipefail
+          timeout --signal=TERM --kill-after=30s 600s python -m modal run modal_app.py --stage diarization --audio local_audio/kyoto_two_speakers.ogg --output local_runs/03-diar 2>&1 | tee local_runs/03-diar.log
+          python scripts/validate_evidence.py local_runs/03-diar/evidence.json --stage diarization
+          python scripts/validate_run.py local_runs/03-diar/run-1.zip --stage diarization
+      - name: Test 4 - integrated output
+        run: |
+          set -o pipefail
+          timeout --signal=TERM --kill-after=30s 600s python -m modal run modal_app.py --audio local_audio/kyoto_two_speakers.ogg --output local_runs/04-full 2>&1 | tee local_runs/04-full.log
+          python scripts/validate_evidence.py local_runs/04-full/evidence.json --stage full
+          python scripts/validate_run.py local_runs/04-full/run-1.zip
+      - name: Test 5 - diarization OFF (no HF Secret)
+        run: |
+          set -o pipefail
+          timeout --signal=TERM --kill-after=30s 600s python -m modal run modal_app.py --audio local_audio/kyoto_two_speakers.ogg --no-diarization --output local_runs/05-off 2>&1 | tee local_runs/05-off.log
+          python scripts/validate_evidence.py local_runs/05-off/evidence.json --stage full --off
+          python scripts/validate_run.py local_runs/05-off/run-1.zip --off
+      - name: Test 6a - offline model weights reload and real inference
+        run: |
+          set -o pipefail
+          timeout --signal=TERM --kill-after=30s 600s python -m modal run modal_app.py --audio local_audio/kyoto_two_speakers.ogg --repeat 2 --output local_runs/06-model-cache 2>&1 | tee local_runs/06-model-cache.log
+          python scripts/validate_evidence.py local_runs/06-model-cache/evidence.json --stage full --cache-mode model
+      - name: Test 6b - result JSON reuse
+        run: |
+          set -o pipefail
+          timeout --signal=TERM --kill-after=30s 600s python -m modal run modal_app.py --audio local_audio/kyoto_two_speakers.ogg --repeat 2 --result-cache --output local_runs/07-result-cache 2>&1 | tee local_runs/07-result-cache.log
+          python scripts/validate_evidence.py local_runs/07-result-cache/evidence.json --stage full --cache-mode result
+      - name: Upload evidence and output archives (no input audio or credentials)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: transcriber-stage1-test1-${{ github.run_id }}
+          name: transcriber-stage1-tests2-6-${{ github.run_id }}
           path: local_runs/
           retention-days: 7
