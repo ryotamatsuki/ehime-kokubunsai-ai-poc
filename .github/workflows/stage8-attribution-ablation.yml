@@ -1,8 +1,5 @@
 name: Stage8 pilot normal-vs-exclusive speaker attribution cpCER (3 dialogues)
 on:
-  push:
-    branches: [eval/meeting-transcriber-stage1-20261030]
-    paths: [.github/workflows/stage8-attribution-ablation.yml]
   workflow_dispatch:
 permissions:
   contents: read
