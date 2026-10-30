@@ -1,5 +1,8 @@
 name: v0.1 isolated 60min Web-to-GPU transcription E2E
 on:
+  push:
+    branches: [eval/meeting-transcriber-stage1-20261030]
+    paths: [.github/workflows/modal-deploy.yml]
   workflow_dispatch:
 permissions:
   contents: read
