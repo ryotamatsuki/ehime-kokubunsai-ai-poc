@@ -1,39 +1,48 @@
-name: Deploy new PoC Modal backend
-
+name: Transcriber Stage 1 isolated GPU validation
 on:
   workflow_dispatch:
-
 permissions:
   contents: read
-
 concurrency:
-  group: ehime-kokubunsai-ai-poc-modal-deploy
+  group: meeting-transcriber-stage1-validation
   cancel-in-progress: false
-
 jobs:
-  deploy:
+  validate:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     environment: ehime-kokubunsai-ai-poc
     steps:
-      - name: Check out this repository
+      - name: Checkout pinned transcriber PR (never deploy the cultural bot)
         uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-
-      - name: Install Modal client
-        run: python -m pip install --upgrade modal fastapi
-
-      - name: Download model to the new Volume
+          repository: ryotamatsuki/japanese-meeting-transcriber-colab
+          ref: d876a626590073fdea46a7e9602dbe2930ab2aa9
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install official Modal SDK
+        run: python -m pip install modal==1.4.3
+      - name: Check credential presence without printing values
         env:
           MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
-        run: modal run modal_backend.py::download_model
-
-      - name: Deploy the new Modal app
+        run: |
+          test -n "$MODAL_TOKEN_ID"
+          test -n "$MODAL_TOKEN_SECRET"
+      - name: Test 1 - L4 CUDA diagnostics
         env:
           MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
-        run: modal deploy modal_backend.py
+        run: |
+          set -o pipefail
+          mkdir -p local_runs
+          python -m modal run modal_app.py --stage gpu --output local_runs/01-gpu 2>&1 | tee local_runs/test1-modal.log
+          python scripts/validate_evidence.py local_runs/01-gpu/evidence.json --stage gpu
+      - name: Upload evidence (no credentials or audio)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: transcriber-stage1-test1-${{ github.run_id }}
+          path: local_runs/
+          retention-days: 7
