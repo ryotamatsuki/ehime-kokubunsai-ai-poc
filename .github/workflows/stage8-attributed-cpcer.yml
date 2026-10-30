@@ -1,0 +1,116 @@
+name: Stage8 speaker-attributed final Japanese transcript 10-dialogue baseline
+on:
+  push:
+    branches: [eval/meeting-transcriber-stage1-20261030]
+    paths: [.github/workflows/stage8-attributed-cpcer.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: meeting-transcriber-stage1-validation
+  cancel-in-progress: false
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    environment: ehime-kokubunsai-ai-poc
+    env:
+      TRANSCRIBER_GPU: A10
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ryotamatsuki/japanese-meeting-transcriber-colab
+          ref: 92c74825df54149b32e17103f8d798bdb1de9011
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install pinned benchmark dependencies
+        run: |
+          python -m pip install modal==1.4.3 pyannote.metrics==4.1 imageio-ffmpeg==0.6.0 rapidfuzz==3.14.3
+          test -n "$MODAL_TOKEN_ID" && test -n "$MODAL_TOKEN_SECRET"
+          python -m unittest tests.test_eval_elan tests.test_evaluate_attributed_transcript -v
+      - name: Measure speaker-permutation CER and overlap-localized proxy for 10 Japanese conversations
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p local_audio local_runs
+          export HF_HUB_DISABLE_TELEMETRY=1
+          FFMPEG="$(python -c 'import imageio_ffmpeg;print(imageio_ffmpeg.get_ffmpeg_exe())')"
+          for n in 01 02 03 04 05 06 07 08 09 10; do
+            echo "DATASET_SAMPLE_START $n"
+            root="https://huggingface.co/datasets/IngCrowd/japanese-themed-dialogue/resolve/main/japanese-themed-dialogue${n}/japanese-themed-dialogue${n}"
+            curl -fLsS --retry 3 --connect-timeout 25 --max-time 180 --output "local_audio/${n}.eaf" "${root}.eaf?download=true"
+            curl -fLsS --retry 3 --connect-timeout 25 --max-time 240 --output "local_audio/${n}.wav" "${root}_audio.wav?download=true"
+            test "$(wc -c < local_audio/${n}.wav)" -gt 5000000
+            "$FFMPEG" -hide_banner -loglevel error -nostdin -y -i "local_audio/${n}.wav" -ac 1 -ar 16000 -b:a 48k "local_audio/${n}.mp3"
+            rm "local_audio/${n}.wav"
+            set +e
+            timeout --signal=TERM --kill-after=30s 450s python -m modal run modal_app.py --stage full --expected-speakers 2 --audio "local_audio/${n}.mp3" --output "local_runs/${n}" > "/tmp/transcriber-${n}.log" 2>&1
+            rc=$?
+            set -e
+            if [ "$rc" -ne 0 ]; then
+              echo "GPU_SAMPLE_FAILURE ${n} exit=${rc}"
+              printf '{"id":"%s","success":false,"stage":"gpu","returncode":%s}\n' "$n" "$rc" > "local_runs/${n}-failure.json"
+            else
+              python scripts/validate_evidence.py "local_runs/${n}/evidence.json" --stage full --expected-gpu A10 >/dev/null
+              python scripts/validate_run.py "local_runs/${n}/run-1.zip" >/dev/null
+              python -m scripts.evaluate_attributed_transcript --eaf "local_audio/${n}.eaf" --zip "local_runs/${n}/run-1.zip" --output "local_runs/${n}-score.json"
+              python - "${n}" <<'PY'
+          import json,sys,pathlib
+          folder=pathlib.Path('local_runs')/sys.argv[1]
+          e=json.loads((folder/'evidence.json').read_text())
+          p=pathlib.Path('local_runs')/(sys.argv[1]+'-score.json')
+          v=json.loads(p.read_text())
+          v['gpu_pipeline_seconds']=e['runs'][0].get('pipeline_seconds')
+          p.write_text(json.dumps(v,ensure_ascii=False,indent=2))
+          PY
+              echo "GPU_SAMPLE_PASS $n"
+            fi
+            rm -f "local_audio/${n}.eaf" "local_audio/${n}.mp3"
+          done
+          python - <<'PY'
+          from pathlib import Path
+          import json,statistics
+          scores=sorted(Path('local_runs').glob('??-score.json'))
+          failures=sorted(Path('local_runs').glob('??-failure.json'))
+          rows=[{'id':p.name[:2],**json.loads(p.read_text())} for p in scores]
+          median=lambda vals:round(statistics.median(vals),6) if vals else None
+          cp=[r['full_cpcer']['cpcer'] for r in rows if r['full_cpcer']['cpcer'] is not None]
+          overlap=[r['overlap_proxy_cpcer']['cpcer'] for r in rows if r['overlap_proxy_cpcer']['cpcer'] is not None]
+          other=[r['nonoverlap_proxy_cpcer']['cpcer'] for r in rows if r['nonoverlap_proxy_cpcer']['cpcer'] is not None]
+          result={'dataset':'IngCrowd/japanese-themed-dialogue',
+                  'license':'CC BY-NC 4.0; noncommercial benchmark only',
+                  'completed':len(rows),'failed_ids':[x.name[:2] for x in failures],
+                  'all_10_completed':len(rows)==10 and not failures,
+                  'speaker_attributed_cpcer_median_percent':100*median(cp) if cp else None,
+                  'overlap_utterance_proxy_median_percent':100*median(overlap) if overlap else None,
+                  'other_utterance_proxy_median_percent':100*median(other) if other else None,
+                  'total_reference_chars':sum(r['full_cpcer']['reference_characters'] for r in rows),
+                  'total_hypothesis_chars':sum(r['full_cpcer']['hypothesis_characters'] for r in rows),
+                  'per_record':[{'id':r['id'],'reference_sha256':r['eaf_sha256'],
+                      'cpcer_percent':100*r['full_cpcer']['cpcer'] if r['full_cpcer']['cpcer'] is not None else None,
+                      'overlap_proxy_percent':100*r['overlap_proxy_cpcer']['cpcer'] if r['overlap_proxy_cpcer']['cpcer'] is not None else None,
+                      'nonoverlap_proxy_percent':100*r['nonoverlap_proxy_cpcer']['cpcer'] if r['nonoverlap_proxy_cpcer']['cpcer'] is not None else None,
+                      'reference_overlap_seconds':r['human_overlap_seconds'],
+                      'reference_chars':r['full_cpcer']['reference_characters'],
+                      'hypothesis_chars':r['full_cpcer']['hypothesis_characters'],
+                      'unassigned_chars':r['full_cpcer']['unassigned_characters'],
+                      'gpu_pipeline_seconds':r['gpu_pipeline_seconds']} for r in rows],
+                  'limitations':'All-speaker cpCER global label permutation; time-local overlap proxy includes utterances straddling overlap boundaries. Not evidence for benefits of overlap re-ASR or improving model.'}
+          Path('local_runs/attributed-cpcer-summary.json').write_text(json.dumps(result,ensure_ascii=False,indent=2))
+          print('STAGE8_METRICS_ONLY',json.dumps({k:v for k,v in result.items() if k!='per_record'},ensure_ascii=False))
+          PY
+      - name: Preserve metrics ONLY (no original audio, ELAN transcripts or raw model text)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stage8-japanese-attributed-cpcer-${{ github.run_id }}
+          path: |
+            local_runs/attributed-cpcer-summary.json
+            local_runs/??-score.json
+            local_runs/??-failure.json
+          if-no-files-found: warn
+          retention-days: 7
