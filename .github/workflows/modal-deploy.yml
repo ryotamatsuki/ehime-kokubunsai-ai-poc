@@ -1,5 +1,10 @@
-name: Transcriber v0.1 one-hour synthetic smoke A10
+name: v0.1 isolated Modal private beta full E2E smoke
 on:
+  push:
+    branches:
+      - eval/meeting-transcriber-stage1-20261030
+    paths:
+      - .github/workflows/modal-deploy.yml
   workflow_dispatch:
 permissions:
   contents: read
@@ -7,67 +12,73 @@ concurrency:
   group: meeting-transcriber-stage1-validation
   cancel-in-progress: false
 jobs:
-  long:
+  e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     environment: ehime-kokubunsai-ai-poc
     env:
-      TRANSCRIBER_GPU: A10
       MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
       MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
     steps:
       - uses: actions/checkout@v4
         with:
           repository: ryotamatsuki/japanese-meeting-transcriber-colab
-          ref: 2cecc305c65876a68b18c616374d73bf6326817c
+          ref: e7a0d42f64b4fcef3c6392aa4310f0c888655624
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Prepare CC-BY licensed 60min SYNTHETIC REPEATED test recording
+      - name: Install test client and Modal SDK
         run: |
-          set -e
-          python -m pip install modal==1.4.3 imageio-ffmpeg==0.6.0
-          test -n "$MODAL_TOKEN_ID" && test -n "$MODAL_TOKEN_SECRET"
+          python -m pip install modal==1.4.3 httpx==0.28.1
+          test -n "$MODAL_TOKEN_ID"
+          test -n "$MODAL_TOKEN_SECRET"
           mkdir -p local_runs
           python scripts/prepare_validation_audio.py
-          FFMPEG="$(python -c 'import imageio_ffmpeg;print(imageio_ffmpeg.get_ffmpeg_exe())')"
-          "$FFMPEG" -hide_banner -loglevel error -nostdin -y -stream_loop 106 -i local_audio/kyoto_two_speakers.ogg -t 3600 -ac 1 -ar 16000 -c:a libmp3lame -b:a 48k local_audio/synthetic_repeated_60m.mp3
-          python - <<'PY'
-          from pathlib import Path
-          p=Path('local_audio/synthetic_repeated_60m.mp3')
-          assert 5*1024*1024<p.stat().st_size<25*1024*1024
-          print('Synthetic repeated public two-speaker audio size',p.stat().st_size,'bytes')
-          PY
-      - name: Run full real-GPU hour-long diarization plus ASR
+      - name: Create isolated environment, ephemeral credentials, deploy, test and destroy
+        shell: bash
         run: |
-          set -o pipefail
-          timeout --signal=TERM --kill-after=60s 1140s python -m modal run modal_app.py --audio local_audio/synthetic_repeated_60m.mp3 --expected-speakers 2 --output local_runs/60min 2>&1 | tee local_runs/60min.log
-          python scripts/validate_evidence.py local_runs/60min/evidence.json --stage full --expected-gpu A10
-          python scripts/validate_run.py local_runs/60min/run-1.zip
-      - name: Validate output covers recording tail without publishing transcript
-        run: |
-          python - <<'PY'
-          import json,zipfile,pathlib
-          e=json.loads(pathlib.Path('local_runs/60min/evidence.json').read_text())
-          metrics=e['runs'][0]
-          with zipfile.ZipFile('local_runs/60min/run-1.zip') as z:
-              asr=json.loads(z.read('whisper_asr.json'))
-              report=json.loads(z.read('処理レポート.json'))
-              last=max(s['end'] for s in asr['segments'])
-              result={'audio_seconds':metrics.get('audio_seconds'),'asr_last_end':last,'asr_segments':report['asr_segments'],'utterances':report['utterances'],'pipeline_seconds':metrics.get('pipeline_seconds'),'client_wall_seconds':e.get('client_wall_seconds'),'estimated_speakers':report['estimated_speakers'],'sampled_peak_gpu_mib':metrics.get('sampled_gpu_peak_mib')}
-              pathlib.Path('local_runs/summary.json').write_text(json.dumps(result,indent=2))
-              print('Synthetic 60min regression:',json.dumps(result))
-              assert 3540<=metrics.get('audio_seconds',0)<=3601
-              assert last>=3540,'Final minute not present in ASR'
+          set -euo pipefail
+          env_name="transcriber-v01-smoke-${GITHUB_RUN_ID}"
+          created=0
+          cleanup() {
+            if [[ "$created" == 1 ]]; then
+              modal environment delete -y "$env_name" > /tmp/beta-teardown.log 2>&1 || {
+                echo "ISOLATED_ENV_CLEANUP_FAILED: $env_name"; cat /tmp/beta-teardown.log; return 1;
+              }
+              echo "ISOLATED_ENV_CLEANUP_SUCCEEDED"
+            fi
+          }
+          trap cleanup EXIT
+          modal environment create "$env_name"
+          created=1
+          export BETA_SMOKE_PASSWORD
+          BETA_SMOKE_PASSWORD="$(openssl rand -hex 20)"
+          export BETA_SESSION_SECRET
+          BETA_SESSION_SECRET="$(openssl rand -hex 36)"
+          echo "::add-mask::$BETA_SMOKE_PASSWORD"
+          echo "::add-mask::$BETA_SESSION_SECRET"
+          # Dummy HF token is unused because this test explicitly disables diarization.
+          modal secret create -e "$env_name" transcriber-hf HF_TOKEN="offline_asr_only_dummy_token"
+          modal secret create -e "$env_name" transcriber-beta-auth "BETA_PASSWORD=$BETA_SMOKE_PASSWORD" "BETA_SESSION_SECRET=$BETA_SESSION_SECRET"
+          timeout --signal=TERM --kill-after=20s 780s modal deploy -e "$env_name" beta_modal.py 2>&1 | tee /tmp/beta-deploy.log
+          export BETA_SMOKE_URL
+          BETA_SMOKE_URL="$(python - <<'PY'
+          import re
+          log=open('/tmp/beta-deploy.log').read()
+          links=re.findall(r'https://[A-Za-z0-9-]+\.modal\.run',log)
+          if not links:
+              raise SystemExit('No Modal HTTPS URL was returned by deployment')
+          print(links[0])
           PY
-      - name: Preserve sanitized technical metrics only
+          )"
+          timeout --signal=TERM --kill-after=20s 770s python scripts/smoke_beta_live.py
+          echo 'PRIVATE_BETA_EPHEMERAL_E2E_COMPLETE; cleanup follows'
+      - name: Preserve sanitized smoke result and test parameters only
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: transcriber-v01-long-synthetic-${{ github.run_id }}
-          path: |
-            local_runs/summary.json
-            local_runs/60min/evidence.json
-            local_runs/60min.log
+          name: transcriber-v01-isolated-e2e-${{ github.run_id }}
+          path: local_runs/smoke_result.json
+          if-no-files-found: warn
           retention-days: 7
