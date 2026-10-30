@@ -1,0 +1,50 @@
+name: Stage15 isolated Modal physical retention audit
+on:
+  push:
+    branches: [eval/meeting-transcriber-stage1-20261030]
+    paths: [.github/workflows/transcriber-stage15-retention.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: transcriber-stage15-retention-cpu
+  cancel-in-progress: false
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: ehime-kokubunsai-ai-poc
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ryotamatsuki/japanese-meeting-transcriber-colab
+          ref: 2762c0baa040de5e067115f7dddbd18970c1d853
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Audit real Modal Volume and Dict in ephemeral workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install modal==1.4.3
+          test -n "$MODAL_TOKEN_ID" && test -n "$MODAL_TOKEN_SECRET"
+          env_name="transcriber-retention-${GITHUB_RUN_ID}"
+          created=0
+          cleanup() {
+            if [[ "$created" == 1 ]]; then
+              modal environment delete -y "$env_name" > /tmp/retention-cleanup.log 2>&1 || {
+                echo "RETENTION_TEST_ENV_CLEANUP_FAILED"
+                return 1
+              }
+              echo "RETENTION_TEST_ENV_CLEANUP_SUCCEEDED"
+            fi
+          }
+          trap cleanup EXIT
+          modal environment create "$env_name"
+          created=1
+          timeout --signal=TERM --kill-after=15s 480s modal run -e "$env_name" modal_stage15_retention_audit.py 2>&1 | tee /tmp/retention-test.log
+          grep -q STAGE15_MODAL_RETENTION_AUDIT /tmp/retention-test.log
