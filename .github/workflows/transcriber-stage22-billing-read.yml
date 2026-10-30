@@ -1,0 +1,42 @@
+name: Stage22 read-only Modal billing access check
+on:
+  push:
+    branches: [eval/meeting-transcriber-stage1-20261030]
+    paths: [.github/workflows/transcriber-stage22-billing-read.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  billing:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    environment: ehime-kokubunsai-ai-poc
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Verify billing API access without exposing private spend
+        run: |
+          set -euo pipefail
+          test -n "$MODAL_TOKEN_ID" && test -n "$MODAL_TOKEN_SECRET"
+          python -m pip install modal==1.6.3
+          python - <<'PY'
+          import decimal
+          import modal
+          summary=modal.Workspace.from_context().billing.summary(cycle='this month')
+          billed=summary.billed_cost
+          metered=summary.metered_cost
+          if not isinstance(billed,decimal.Decimal) or not isinstance(metered,decimal.Decimal):
+              raise RuntimeError('Billing API did not return Decimal values')
+          if not (billed.is_finite() and metered.is_finite()):
+              raise RuntimeError('Invalid billing data')
+          # This public repository must never print/private-store user billing figures.
+          print('BILLING_API_ACCESS_OK; actual charges deliberately not published')
+          print('BUDGET_CONFIGURATION_NOT_AUDITED; verify in private Modal dashboard')
+          PY
