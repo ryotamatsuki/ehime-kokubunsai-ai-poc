@@ -1,5 +1,8 @@
-name: Meeting ASR open-source-inspired A10 quality comparison
+name: Transcriber v0.1 one-hour synthetic smoke A10
 on:
+  push:
+    branches: [eval/meeting-transcriber-stage1-20261030]
+    paths: [.github/workflows/modal-deploy.yml]
   workflow_dispatch:
 permissions:
   contents: read
@@ -7,9 +10,9 @@ concurrency:
   group: meeting-transcriber-stage1-validation
   cancel-in-progress: false
 jobs:
-  compare:
+  long:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
     environment: ehime-kokubunsai-ai-poc
     env:
       TRANSCRIBER_GPU: A10
@@ -19,60 +22,55 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: ryotamatsuki/japanese-meeting-transcriber-colab
-          ref: acf5043c1bbd24d602c278c0491e56a063a8ba9f
+          ref: 2cecc305c65876a68b18c616374d73bf6326817c
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Prepare public Japanese dialogue and community subtitles
+      - name: Prepare CC-BY licensed 60min SYNTHETIC REPEATED test recording
         run: |
-          python -m pip install modal==1.4.3
+          set -e
+          python -m pip install modal==1.4.3 imageio-ffmpeg==0.6.0
           test -n "$MODAL_TOKEN_ID" && test -n "$MODAL_TOKEN_SECRET"
           mkdir -p local_runs
           python scripts/prepare_validation_audio.py
-          cp local_audio/provenance.json local_runs/audio-provenance.json
-          python - <<'PY'
-          import urllib.request, pathlib
-          url="https://commons.wikimedia.org/w/index.php?title=TimedText%3AKyoto_women_conversation_in_1964.ogg.ja.srt&action=raw"
-          req=urllib.request.Request(url,headers={'User-Agent':'JapaneseMeetingTranscriberEvaluation/1.0 (public open-source comparative research)'})
-          with urllib.request.urlopen(req,timeout=60) as r:
-              content=r.read(100000)
-          if b'-->' not in content or b'00:00:' not in content:
-              raise ValueError('Reference subtitles are not raw SRT; refusing CER evaluation')
-          pathlib.Path('local_audio/reference.srt').write_bytes(content)
-          print('Reference subtitles checked; no subtitles or audio will be committed')
-          PY
-      - name: A10 baseline beam5 with word-attribution review
-        run: |
-          set -o pipefail
-          timeout --signal=TERM --kill-after=30s 360s python -m modal run modal_app.py --stage full --expected-speakers 2 --quality-experiment --asr-beam-size 5 --audio local_audio/kyoto_two_speakers.ogg --output local_runs/asr-beam5 2>&1 | tee local_runs/asr-beam5.log
-          python scripts/validate_evidence.py local_runs/asr-beam5/evidence.json --stage full --expected-gpu A10
-          python scripts/validate_run.py local_runs/asr-beam5/run-1.zip
-      - name: A10 candidate beam8 with same model/audio
-        run: |
-          set -o pipefail
-          timeout --signal=TERM --kill-after=30s 360s python -m modal run modal_app.py --stage full --expected-speakers 2 --quality-experiment --asr-beam-size 8 --audio local_audio/kyoto_two_speakers.ogg --output local_runs/asr-beam8 2>&1 | tee local_runs/asr-beam8.log
-          python scripts/validate_evidence.py local_runs/asr-beam8/evidence.json --stage full --expected-gpu A10
-          python scripts/validate_run.py local_runs/asr-beam8/run-1.zip
-      - name: Evaluate normalized CER and review flags
-        run: |
-          python scripts/evaluate_asr_cer.py --reference-srt local_audio/reference.srt --baseline local_runs/asr-beam5/run-1.zip --candidate local_runs/asr-beam8/run-1.zip --output local_runs/cer-comparison.json
+          FFMPEG="$(python -c 'import imageio_ffmpeg;print(imageio_ffmpeg.get_ffmpeg_exe())')"
+          "$FFMPEG" -hide_banner -loglevel error -nostdin -y -stream_loop 106 -i local_audio/kyoto_two_speakers.ogg -t 3600 -ac 1 -ar 16000 -c:a libmp3lame -b:a 48k local_audio/synthetic_repeated_60m.mp3
           python - <<'PY'
           from pathlib import Path
-          from zipfile import ZipFile
-          import json
-          for mode in ('asr-beam5','asr-beam8'):
-              with ZipFile(Path('local_runs')/mode/'run-1.zip') as z:
-                  review=json.loads(z.read('話者割当て要確認.json'))
-                  asr=json.loads(z.read('whisper_asr.json'))
-                  assert len(review['words']) > 0
-                  assert asr['settings']['beam_size']==int(mode.split('beam')[1])
-                  print(mode, 'review_words', review['review_words'], 'total', review['word_count'], 'flags',review['reason_counts'])
+          p=Path('local_audio/synthetic_repeated_60m.mp3')
+          assert 5*1024*1024<p.stat().st_size<25*1024*1024
+          print('Synthetic repeated public two-speaker audio size',p.stat().st_size,'bytes')
           PY
-      - name: Preserve sanitized results and metrics only
+      - name: Run full real-GPU hour-long diarization plus ASR
+        run: |
+          set -o pipefail
+          timeout --signal=TERM --kill-after=60s 1140s python -m modal run modal_app.py --audio local_audio/synthetic_repeated_60m.mp3 --expected-speakers 2 --output local_runs/60min 2>&1 | tee local_runs/60min.log
+          python scripts/validate_evidence.py local_runs/60min/evidence.json --stage full --expected-gpu A10
+          python scripts/validate_run.py local_runs/60min/run-1.zip
+      - name: Validate output covers recording tail without publishing transcript
+        run: |
+          python - <<'PY'
+          import json,zipfile,pathlib
+          e=json.loads(pathlib.Path('local_runs/60min/evidence.json').read_text())
+          metrics=e['runs'][0]
+          with zipfile.ZipFile('local_runs/60min/run-1.zip') as z:
+              asr=json.loads(z.read('whisper_asr.json'))
+              report=json.loads(z.read('処理レポート.json'))
+              last=max(s['end'] for s in asr['segments'])
+              result={'audio_seconds':metrics.get('audio_seconds'),'asr_last_end':last,'asr_segments':report['asr_segments'],'utterances':report['utterances'],'pipeline_seconds':metrics.get('pipeline_seconds'),'client_wall_seconds':e.get('client_wall_seconds'),'estimated_speakers':report['estimated_speakers'],'sampled_peak_gpu_mib':metrics.get('sampled_gpu_peak_mib')}
+              pathlib.Path('local_runs/summary.json').write_text(json.dumps(result,indent=2))
+              print('Synthetic 60min regression:',json.dumps(result))
+              assert 3540<=metrics.get('audio_seconds',0)<=3601
+              assert last>=3540,'Final minute not present in ASR'
+          PY
+      - name: Preserve sanitized technical metrics only
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: transcriber-asr-open-source-quality-${{ github.run_id }}
-          path: local_runs/
+          name: transcriber-v01-long-synthetic-${{ github.run_id }}
+          path: |
+            local_runs/summary.json
+            local_runs/60min/evidence.json
+            local_runs/60min.log
           retention-days: 7
