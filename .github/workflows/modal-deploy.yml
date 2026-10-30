@@ -16,7 +16,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ryotamatsuki/japanese-meeting-transcriber-colab
-          ref: cd6636cb8056e4fa3e98c4f3061e00c45a0e793c
+          ref: b7bf442ea57d8f3cd7a41e4a8ee31796d56144c1
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
@@ -39,6 +39,19 @@ jobs:
           mkdir -p local_runs
           python -m modal run modal_app.py --stage gpu --output local_runs/01-gpu 2>&1 | tee local_runs/test1-modal.log
           python scripts/validate_evidence.py local_runs/01-gpu/evidence.json --stage gpu
+      - name: Prepare licensed short Japanese audio
+        run: |
+          python scripts/prepare_validation_audio.py
+          cp local_audio/provenance.json local_runs/audio-provenance.json
+      - name: Test 2 - Whisper large-v3 float16 Japanese ASR
+        env:
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+        run: |
+          set -o pipefail
+          python -m modal run modal_app.py --stage asr --audio local_audio/kyoto_two_speakers.ogg --output local_runs/02-asr 2>&1 | tee local_runs/test2-modal.log
+          python scripts/validate_evidence.py local_runs/02-asr/evidence.json --stage asr
+          python scripts/validate_run.py local_runs/02-asr/run-1.zip --stage asr
       - name: Upload evidence (no credentials or audio)
         if: always()
         uses: actions/upload-artifact@v4
