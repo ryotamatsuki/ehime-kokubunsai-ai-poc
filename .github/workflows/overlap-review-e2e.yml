@@ -1,8 +1,5 @@
 name: v0.1 overlap-review Japanese dialogue live Web-to-GPU E2E
 on:
-  push:
-    branches: [eval/meeting-transcriber-stage1-20261030]
-    paths: [.github/workflows/overlap-review-e2e.yml]
   workflow_dispatch:
 permissions:
   contents: read
