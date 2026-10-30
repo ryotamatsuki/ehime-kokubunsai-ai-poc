@@ -1,0 +1,123 @@
+name: Stage10 Japanese ASR 3x3 model-beam paired CER study
+on:
+  push:
+    branches: [eval/meeting-transcriber-stage1-20261030]
+    paths: [.github/workflows/stage10-asr-model-ablation.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: meeting-transcriber-stage1-validation
+  cancel-in-progress: false
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 48
+    environment: ehime-kokubunsai-ai-poc
+    env:
+      TRANSCRIBER_GPU: A10
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ryotamatsuki/japanese-meeting-transcriber-colab
+          ref: b2c0d7cd30a2604aa565c588c7e67ddc8ce6e438
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install evaluation dependencies; validate opt-in constraints
+        run: |
+          set -eu
+          python -m pip install modal==1.4.3 imageio-ffmpeg==0.6.0 rapidfuzz==3.14.3
+          python -m unittest tests.test_stage10_asr_selection -v
+          test -n "$MODAL_TOKEN_ID" && test -n "$MODAL_TOKEN_SECRET"
+          mkdir -p local_audio local_runs
+      - name: Nine same-audio A10 runs — large-v3 beam5/8 and turbo beam5
+        shell: bash
+        run: |
+          set -euo pipefail
+          FFMPEG="$(python -c 'import imageio_ffmpeg;print(imageio_ffmpeg.get_ffmpeg_exe())')"
+          for n in 01 05 08; do
+            root="https://huggingface.co/datasets/IngCrowd/japanese-themed-dialogue/resolve/main/japanese-themed-dialogue${n}/japanese-themed-dialogue${n}"
+            curl -fLsS --retry 3 --connect-timeout 25 --max-time 210 -o "local_audio/${n}.eaf" "${root}.eaf?download=true"
+            curl -fLsS --retry 3 --connect-timeout 25 --max-time 250 -o "local_audio/${n}.wav" "${root}_audio.wav?download=true"
+            "$FFMPEG" -hide_banner -loglevel error -nostdin -y -i "local_audio/${n}.wav" -vn -ac 1 -ar 16000 -b:a 48k "local_audio/${n}.mp3"
+            rm "local_audio/${n}.wav"
+            for mode in v3b5 v3b8 turbo; do
+              mkdir -p "local_runs/${n}-${mode}"
+              args=()
+              if [[ "$mode" == v3b8 ]]; then args+=(--quality-experiment --asr-beam-size 8); fi
+              if [[ "$mode" == turbo ]]; then args+=(--quality-experiment --asr-model turbo); fi
+              echo "ASR_TRIAL_START id=$n mode=$mode"
+              set +e
+              timeout --signal=TERM --kill-after=30s 440s python -m modal run modal_app.py --audio "local_audio/${n}.mp3" --stage asr --no-diarization --output "local_runs/${n}-${mode}" "${args[@]}" >/tmp/stage10.log 2>&1
+              rc=$?
+              set -e
+              if [[ "$rc" -ne 0 ]]; then
+                echo "ASR_TRIAL_FAILURE id=$n mode=$mode exit=$rc"
+                printf '{"id":"%s","mode":"%s","success":false,"exit_code":%s}\n' "$n" "$mode" "$rc" > "local_runs/${n}-${mode}-failure.json"
+              else
+                python scripts/validate_evidence.py "local_runs/${n}-${mode}/evidence.json" --stage asr --expected-gpu A10 >/dev/null
+                python - "$n" "$mode" <<'PY'
+          import json,sys,zipfile
+          from pathlib import Path
+          from scripts.eval_elan_ja import load_elan
+          from scripts.evaluate_asr_cer import evaluate
+          n,mode=sys.argv[1:]
+          ref,sha=load_elan(Path('local_audio')/(n+'.eaf'))
+          p=Path('local_runs')/(n+'-'+mode)
+          with zipfile.ZipFile(p/'run-1.zip') as z:
+              raw=json.loads(z.read('whisper_asr.json'))
+          text=''.join(seg.get('text','') for seg in raw['segments'])
+          score=evaluate(''.join(t['text'] for t in ref),text)
+          stats=json.loads((p/'evidence.json').read_text())['runs'][0]
+          record={'id':n,'mode':mode,'eaf_sha256':sha,
+                  'cer':score['normalized_cer'],
+                  'reference_chars':score['reference_characters'],
+                  'hypothesis_chars':score['hypothesis_characters'],
+                  'asr_seconds':stats.get('asr_inference_seconds'),
+                  'pipeline_seconds':stats.get('pipeline_seconds'),
+                  'model':raw['settings']['model'],
+                  'beam':raw['settings']['beam_size']}
+          (Path('local_runs')/(n+'-'+mode+'-score.json')).write_text(json.dumps(record))
+          print('ASR_TRIAL_PASS',json.dumps({'id':n,'mode':mode,'cer':record['cer']}))
+          PY
+              fi
+            done
+            rm -f "local_audio/${n}.mp3" "local_audio/${n}.eaf"
+          done
+          python - <<'PY'
+          import json,statistics
+          from pathlib import Path
+          scores=[json.loads(x.read_text()) for x in sorted(Path('local_runs').glob('??-*-score.json'))]
+          fail=[p.name for p in Path('local_runs').glob('??-*-failure.json')]
+          result={'recordings':3,'expected_trials':9,'completed_trials':len(scores),
+                  'failed':fail,'reference':'IngCrowd Japanese dialogue, CC BY-NC 4.0, noncommercial only',
+                  'method':'same mixed audio, ASR-only, transcript text order, no diarization, 3 paired recordings',
+                  'measure':'NFKC normalized rough flattened full-dialogue CER; overlap speech ordering may confound',
+                  'modes':{},'per_record':scores}
+          for mode in ('v3b5','v3b8','turbo'):
+              arr=[s for s in scores if s['mode']==mode]
+              if len(arr)==3:
+                  result['modes'][mode]={'median_cer_percent':100*statistics.median(x['cer'] for x in arr),
+                      'total_edit_cer_estimate':sum(x['cer']*x['reference_chars'] for x in arr)/sum(x['reference_chars'] for x in arr),
+                      'total_asr_seconds':sum(x['asr_seconds'] for x in arr)}
+          b={x['id']:x for x in scores if x['mode']=='v3b5'}
+          result['deltas']={m:[{'id':s['id'],'delta_cer_pp':100*(s['cer']-b[s['id']]['cer'])} for s in scores if s['mode']==m and s['id'] in b]
+                            for m in ('v3b8','turbo')}
+          Path('local_runs/stage10-summary.json').write_text(json.dumps(result,ensure_ascii=False,indent=2))
+          print('STAGE10_METRICS_ONLY',json.dumps({k:v for k,v in result.items() if k!='per_record'},ensure_ascii=False))
+          PY
+      - name: Upload sanitized metrics only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stage10-3dialogue-ASR-candidates-${{ github.run_id }}
+          path: |
+            local_runs/stage10-summary.json
+            local_runs/??-*-score.json
+            local_runs/??-*-failure.json
+          if-no-files-found: warn
+          retention-days: 7
