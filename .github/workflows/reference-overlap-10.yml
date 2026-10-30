@@ -1,8 +1,5 @@
 name: Japanese ELAN overlap-error floor diagnostic (CPU only)
 on:
-  push:
-    branches: [eval/meeting-transcriber-stage1-20261030]
-    paths: [.github/workflows/reference-overlap-10.yml]
   workflow_dispatch:
 permissions:
   contents: read
