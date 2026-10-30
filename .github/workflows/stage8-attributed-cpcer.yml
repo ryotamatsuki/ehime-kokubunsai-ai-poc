@@ -1,8 +1,5 @@
 name: Stage8 speaker-attributed final Japanese transcript 10-dialogue baseline
 on:
-  push:
-    branches: [eval/meeting-transcriber-stage1-20261030]
-    paths: [.github/workflows/stage8-attributed-cpcer.yml]
   workflow_dispatch:
 permissions:
   contents: read
