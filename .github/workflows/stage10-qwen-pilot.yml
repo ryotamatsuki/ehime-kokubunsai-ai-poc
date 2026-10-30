@@ -1,8 +1,5 @@
 name: Stage10 Qwen3-ASR 1.7B Japanese research pilot (2 dialogues)
 on:
-  push:
-    branches: [eval/meeting-transcriber-stage1-20261030]
-    paths: [.github/workflows/stage10-qwen-pilot.yml]
   workflow_dispatch:
 permissions:
   contents: read
