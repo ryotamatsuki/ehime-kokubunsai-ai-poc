@@ -28,7 +28,7 @@ jobs:
           python-version: '3.11'
       - name: Install test client and Modal SDK
         run: |
-          python -m pip install modal==1.4.3 httpx==0.28.1 imageio-ffmpeg==0.6.0
+          python -m pip install -r requirements-beta-test.txt modal==1.4.3 imageio-ffmpeg==0.6.0
           test -n "$MODAL_TOKEN_ID"
           test -n "$MODAL_TOKEN_SECRET"
           mkdir -p local_runs
