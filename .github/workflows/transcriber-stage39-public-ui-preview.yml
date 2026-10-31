@@ -1,0 +1,85 @@
+name: Stage39 deploy public read-only React Studio preview
+on:
+  push:
+    branches: [eval/meeting-transcriber-stage1-20261030]
+    paths:
+      - .github/workflows/transcriber-stage39-public-ui-preview.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: stage39-kiroku-public-preview
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: ehime-kokubunsai-ai-poc
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ryotamatsuki/japanese-meeting-transcriber-colab
+          ref: 18b6ee83dfbd5353ac7ff42b639e0247000a2264
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Build PUBLIC PREVIEW mode only
+        working-directory: frontend
+        env:
+          VITE_PREVIEW_ONLY: 'true'
+        run: |
+          set -euo pipefail
+          npm install --no-audit --no-fund
+          npm run build
+          test -s ../beta/react_dist/index.html
+          grep -q 'ui/assets/' ../beta/react_dist/index.html
+      - name: Install only CPU web and unit-test dependencies
+        run: |
+          python -m pip install modal==1.6.3 fastapi==0.115.12 uvicorn==0.34.2 httpx==0.28.1
+          python -m unittest discover -s tests -p test_public_preview.py -v
+      - name: Validate deployment is detached from GPU and personal recordings
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+          tree=ast.parse(Path("modal_public_preview.py").read_text())
+          names={x.name for x in tree.body if isinstance(x,(ast.FunctionDef,ast.AsyncFunctionDef))}
+          assert names=={"create_preview_app","public_ui_preview"},names
+          src=Path("modal_public_preview.py").read_text()
+          for forbidden in ("gpu=", "modal.Volume", "modal.Dict", "HF_TOKEN",
+                            "transcriber-beta-auth", "transcriber-hf", "transcribe_job.spawn"):
+              assert forbidden not in src,forbidden
+          print("STAGE39_PUBLIC_PREVIEW_NO_GPU_NO_PRIVATE_STORAGE_PASS")
+          PY
+      - name: Deploy isolated CPU-only public preview app (no private data)
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$MODAL_TOKEN_ID"
+          test -n "$MODAL_TOKEN_SECRET"
+          modal deploy --name kiroku-public-studio-preview modal_public_preview.py 2>&1 | tee /tmp/stage39-public-deploy.log
+          url=$(grep -Eo 'https://[a-zA-Z0-9._-]+\.modal\.run' /tmp/stage39-public-deploy.log | head -n 1 || true)
+          if [[ -z "$url" ]]; then
+            echo "Unable to detect the new app URL; use Modal app dashboard."
+            modal app info kiroku-public-studio-preview --json
+            exit 1
+          fi
+          echo "PUBLIC_PREVIEW_URL=$url"
+          response=$(curl --location --fail --show-error --retry 3 --retry-delay 3 --max-time 120 "$url/healthz")
+          RESPONSE_JSON="$response" python - <<'PY'
+          import json,os
+          data=json.loads(os.environ["RESPONSE_JSON"])
+          assert data.get("preview_only") is True and data.get("gpu_enabled") is False,data
+          print("STAGE39_PUBLIC_PREVIEW_HEALTH_PASS")
+          PY
+          test "$(curl -s -o /dev/null -w '%{http_code}' --max-time 90 -X POST "$url/api/jobs")" = "403"
+          test "$(curl -s -o /dev/null -w '%{http_code}' --max-time 90 "$url/api/jobs/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee/audio")" = "404"
+          echo "STAGE39_PUBLIC_PREVIEW_NO_WRITE_NO_AUDIO_PASS"
