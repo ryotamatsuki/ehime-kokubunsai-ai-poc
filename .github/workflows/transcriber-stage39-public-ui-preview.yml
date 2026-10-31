@@ -66,12 +66,10 @@ jobs:
           test -n "$MODAL_TOKEN_ID"
           test -n "$MODAL_TOKEN_SECRET"
           modal deploy --name kiroku-public-studio-preview modal_public_preview.py 2>&1 | tee /tmp/stage39-public-deploy.log
-          url=$(grep -Eo 'https://[a-zA-Z0-9._-]+\.modal\.run' /tmp/stage39-public-deploy.log | head -n 1 || true)
-          if [[ -z "$url" ]]; then
-            echo "Unable to detect the new app URL; use Modal app dashboard."
-            modal app info kiroku-public-studio-preview --json
-            exit 1
-          fi
+          # Modal's rich CLI wraps long URLs across output lines. This exact URL
+          # was emitted by the successful first deploy (Run 41153900009).
+          url="https://ryota-matsuki--kiroku-public-studio-preview-public-ui-preview.us-east.modal.run"
+          modal app info kiroku-public-studio-preview --json
           echo "PUBLIC_PREVIEW_URL=$url"
           response=$(curl --location --fail --show-error --retry 3 --retry-delay 3 --max-time 120 "$url/healthz")
           RESPONSE_JSON="$response" python - <<'PY'
